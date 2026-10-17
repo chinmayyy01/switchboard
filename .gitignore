@@ -1,0 +1,27 @@
+# --- Personal learning notes (kept locally for interview revision, not shipped) ---
+/learning/
+LEARNING.md
+
+# --- Go ---
+# Root binary only. Leading slash matters: plain `switchboard` would also match
+# and ignore the source directory cmd/switchboard/.
+/switchboard
+/bin/
+*.exe
+*.test
+
+# --- Next.js / Node ---
+node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+*.tsbuildinfo
+.vercel
+
+# --- Environment / secrets (never commit these) ---
+.env
+.env.*
+!.env.example
+
+# --- OS / editor ---
+.DS_Store
