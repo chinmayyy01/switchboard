@@ -4,7 +4,7 @@ import "math"
 
 const (
 	SampleRate = 16000
-	frameSize = 320
+	frameSize  = 320
 )
 
 type Segmenter struct {

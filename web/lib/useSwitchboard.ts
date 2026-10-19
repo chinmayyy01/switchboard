@@ -12,6 +12,10 @@ type ServerEvent = {
   state?: string;
   name?: string;
   lang?: string;
+  stt_ms?: number;
+  brain_ms?: number;
+  tts_ms?: number;
+  turn_ms?: number;
 };
 
 export function useSwitchboard() {
@@ -23,6 +27,12 @@ export function useSwitchboard() {
   const [agentState, setAgentState] = useState("");
   const [agentLang, setAgentLang] = useState("");
   const [tool, setTool] = useState("");
+  const [latency, setLatency] = useState<{
+    stt: number;
+    brain: number;
+    tts: number;
+    turn: number;
+  } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
@@ -88,6 +98,14 @@ export function useSwitchboard() {
           break;
         case "tool.call":
           setTool(msg.name ?? "");
+          break;
+        case "latency":
+          setLatency({
+            stt: msg.stt_ms ?? 0,
+            brain: msg.brain_ms ?? 0,
+            tts: msg.tts_ms ?? 0,
+            turn: msg.turn_ms ?? 0,
+          });
           break;
         case "agent.speaking":
           mutedRef.current = true;
@@ -178,6 +196,7 @@ export function useSwitchboard() {
     setAgentState("");
     setAgentLang("");
     setTool("");
+    setLatency(null);
   }, []);
 
   useEffect(() => {
@@ -198,6 +217,7 @@ export function useSwitchboard() {
     agentState,
     agentLang,
     tool,
+    latency,
     startCall,
     endCall,
   };

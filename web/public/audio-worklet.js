@@ -1,7 +1,7 @@
 class PCMCapture extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.frameSize = 320; // 20 ms @ 16000 Hz
+    this.frameSize = 320;
     this.out = new Int16Array(this.frameSize);
     this.filled = 0;
   }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useSwitchboard } from "@/lib/useSwitchboard";
 
@@ -13,6 +14,7 @@ export default function Page() {
     agentState,
     agentLang,
     tool,
+    latency,
     startCall,
     endCall,
   } = useSwitchboard();
@@ -26,6 +28,9 @@ export default function Page() {
         Home-services reception (plumbing/HVAC) — just talk; the agent detects
         your language and answers.
       </p>
+      <Link href="/supervisor" className="text-sm text-blue-600 hover:underline">
+        supervisor view →
+      </Link>
 
       <div className="mt-8 flex items-center gap-3">
         <select
@@ -74,6 +79,13 @@ export default function Page() {
           </span>
         )}
       </p>
+
+      {latency && (
+        <p className="mt-1 text-xs text-neutral-400">
+          stt {latency.stt}ms · brain {latency.brain}ms · tts {latency.tts}ms ·
+          turn {latency.turn}ms
+        </p>
+      )}
 
       <div className="mt-6 space-y-3">
         <p className="text-sm">
