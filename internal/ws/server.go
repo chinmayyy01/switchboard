@@ -29,7 +29,17 @@ var acceptOpts = &websocket.AcceptOptions{
 	OriginPatterns: []string{"localhost:*", "127.0.0.1:*"},
 }
 
-func Handler(h *hub.Hub, st *store.Store, base context.Context) http.HandlerFunc {
+func authorized(r *http.Request, token string) bool {
+	if token == "" {
+		return true
+	}
+	if r.URL.Query().Get("token") == token {
+		return true
+	}
+	return r.Header.Get("X-Supervisor-Token") == token
+}
+
+func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, base context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, acceptOpts)
 		if err != nil {
@@ -37,14 +47,18 @@ func Handler(h *hub.Hub, st *store.Store, base context.Context) http.HandlerFunc
 			return
 		}
 		defer c.CloseNow()
-		if err := run(base, c, h, st); err != nil {
+		if err := run(base, c, h, st, reg); err != nil {
 			log.Printf("ws session ended: %v", err)
 		}
 	}
 }
 
-func SupervisorHandler(h *hub.Hub, base context.Context) http.HandlerFunc {
+func SupervisorHandler(h *hub.Hub, token string, base context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		c, err := websocket.Accept(w, r, acceptOpts)
 		if err != nil {
 			log.Printf("supervisor accept: %v", err)
@@ -72,13 +86,49 @@ func SupervisorHandler(h *hub.Hub, base context.Context) http.HandlerFunc {
 	}
 }
 
+func SupervisorCallHandler(reg *BridgeRegistry, h *hub.Hub, token string, base context.Context) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		id := r.URL.Query().Get("id")
+		br, ok := reg.get(id)
+		if !ok {
+			http.Error(w, "no such call", http.StatusNotFound)
+			return
+		}
+		c, err := websocket.Accept(w, r, acceptOpts)
+		if err != nil {
+			log.Printf("bridge accept: %v", err)
+			return
+		}
+		defer c.CloseNow()
+
+		h.TakeOver(id)
+		cw := &connWriter{ctx: base, c: c}
+		br.setSupervisor(cw)
+		defer br.clearSupervisor(cw)
+
+		for {
+			typ, data, err := c.Read(base)
+			if err != nil {
+				return
+			}
+			if typ == websocket.MessageBinary {
+				br.toCaller(pcmFromBytes(data))
+			}
+		}
+	}
+}
+
 type callMsg struct {
 	control string
 	lang    string
 	pcm     []int16
 }
 
-func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store) error {
+func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, reg *BridgeRegistry) error {
 	c.SetReadLimit(64 * 1024)
 
 	callID := newCallID()
@@ -87,12 +137,18 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store) er
 	metrics.CallStarted()
 	defer h.Unregister(callID)
 
+	br := reg.getOrCreate(callID)
+	defer reg.remove(callID)
+
 	var sel agent.Selector = agent.NewFakeSelector()
 	if real, ok := inference.NewFromEnv(); ok {
 		sel = real
 	}
 
 	w := &connWriter{ctx: ctx, c: c}
+	br.setCaller(w)
+	defer br.clearCaller(w)
+
 	sess := agent.NewSession(sel, agent.FakeBrain{}, wsSink{w: w, hub: h, callID: callID})
 	h.SetControl(callID, func() { sess.SetHumanOwned(true) })
 
@@ -170,7 +226,11 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store) er
 			}
 			push(msgs, callMsg{control: msg.Type, lang: msg.Lang}, &dropped)
 		case websocket.MessageBinary:
-			push(msgs, callMsg{pcm: pcmFromBytes(data)}, &dropped)
+			pcm := pcmFromBytes(data)
+			if br.hasSupervisor() {
+				br.toSupervisor(pcm)
+			}
+			push(msgs, callMsg{pcm: pcm}, &dropped)
 		}
 	}
 }
@@ -199,6 +259,14 @@ func (w *connWriter) write(typ websocket.MessageType, b []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.c.Write(w.ctx, typ, b)
+}
+
+func (w *connWriter) writePCM(pcm []int16) error {
+	b := make([]byte, len(pcm)*2)
+	for i, v := range pcm {
+		binary.LittleEndian.PutUint16(b[i*2:], uint16(v))
+	}
+	return w.write(websocket.MessageBinary, b)
 }
 
 type wsSink struct {
@@ -242,11 +310,7 @@ func (s wsSink) EventJSON(v any) error {
 }
 
 func (s wsSink) Audio(pcm []int16) error {
-	b := make([]byte, len(pcm)*2)
-	for i, v := range pcm {
-		binary.LittleEndian.PutUint16(b[i*2:], uint16(v))
-	}
-	return s.w.write(websocket.MessageBinary, b)
+	return s.w.writePCM(pcm)
 }
 
 func pcmFromBytes(b []byte) []int16 {

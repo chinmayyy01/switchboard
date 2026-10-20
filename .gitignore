@@ -27,6 +27,7 @@ web/next-env.d.ts
 __pycache__/
 *.pyc
 .venv/
+inference/voices/
 
 # --- Call records (local data) ---
 /data/

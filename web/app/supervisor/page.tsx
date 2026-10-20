@@ -1,10 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSupervisor } from "@/lib/useSupervisor";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
+const TOKEN = process.env.NEXT_PUBLIC_SUPERVISOR_TOKEN ?? "";
+const api = (p: string) =>
+  TOKEN
+    ? `${API}${p}${p.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`
+    : `${API}${p}`;
 
 type CallRecord = {
   id: string;
@@ -30,6 +36,7 @@ type Report = {
 
 export default function SupervisorPage() {
   const { calls, connected } = useSupervisor();
+  const router = useRouter();
   const [records, setRecords] = useState<CallRecord[]>([]);
   const [report, setReport] = useState<Report | null>(null);
 
@@ -37,8 +44,8 @@ export default function SupervisorPage() {
     const load = async () => {
       try {
         const [r, rep] = await Promise.all([
-          fetch(`${API}/api/calls`).then((x) => x.json()),
-          fetch(`${API}/api/report`).then((x) => x.json()),
+          fetch(api("/api/calls")).then((x) => x.json()),
+          fetch(api("/api/report")).then((x) => x.json()),
         ]);
         setRecords(r ?? []);
         setReport(rep ?? null);
@@ -51,7 +58,7 @@ export default function SupervisorPage() {
 
   const label = async (id: string, should: boolean) => {
     try {
-      await fetch(`${API}/api/calls/${id}/label`, {
+      await fetch(api(`/api/calls/${id}/label`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ should_escalate: should }),
@@ -59,10 +66,8 @@ export default function SupervisorPage() {
     } catch {}
   };
 
-  const takeOver = async (id: string) => {
-    try {
-      await fetch(`${API}/api/calls/${id}/takeover`, { method: "POST" });
-    } catch {}
+  const takeOver = (id: string) => {
+    router.push(`/supervisor/call/${id}`);
   };
 
   const pct = (x: number) => `${(x * 100).toFixed(0)}%`;

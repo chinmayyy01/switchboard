@@ -26,17 +26,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	token := os.Getenv("SUPERVISOR_TOKEN")
+
 	h := hub.New()
 	st := store.New(*dataDir, 500)
+	reg := ws.NewBridgeRegistry()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", ws.Handler(h, st, ctx))
-	mux.HandleFunc("/ws/supervisor", ws.SupervisorHandler(h, ctx))
+	mux.HandleFunc("/ws", ws.Handler(h, st, reg, ctx))
+	mux.HandleFunc("/ws/supervisor", ws.SupervisorHandler(h, token, ctx))
+	mux.HandleFunc("/ws/supervisor/call", ws.SupervisorCallHandler(reg, h, token, ctx))
 	mux.Handle("/metrics", metrics.Handler())
-	mux.HandleFunc("GET /api/calls", api.Calls(st))
-	mux.HandleFunc("POST /api/calls/{id}/label", api.Label(st))
-	mux.HandleFunc("POST /api/calls/{id}/takeover", api.TakeOver(h))
-	mux.HandleFunc("GET /api/report", api.Report(st))
+	mux.HandleFunc("GET /api/calls", requireToken(token, api.Calls(st)))
+	mux.HandleFunc("POST /api/calls/{id}/label", requireToken(token, api.Label(st)))
+	mux.HandleFunc("POST /api/calls/{id}/takeover", requireToken(token, api.TakeOver(h)))
+	mux.HandleFunc("GET /api/report", requireToken(token, api.Report(st)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
@@ -57,12 +61,22 @@ func main() {
 	}
 }
 
+func requireToken(token string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if token != "" && r.URL.Query().Get("token") != token && r.Header.Get("X-Supervisor-Token") != token {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if origin := r.Header.Get("Origin"); origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Supervisor-Token")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

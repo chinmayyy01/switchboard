@@ -27,11 +27,11 @@ curl localhost:8100/health
 ## Wire the Go service to it
 
 ```bash
-ollama pull qwen3:8b
+ollama pull qwen3:1.7b
 
 export INFERENCE_URL=http://localhost:8100
 export OLLAMA_URL=http://localhost:11434  
-export OLLAMA_MODEL=qwen3:8b 
+export OLLAMA_MODEL=qwen3:1.7b 
 go run ./cmd/switchboard
 ```
 

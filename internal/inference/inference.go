@@ -145,7 +145,7 @@ func NewFromEnv() (*Selector, bool) {
 	}
 	model := os.Getenv("OLLAMA_MODEL")
 	if model == "" {
-		model = "qwen3:8b"
+		model = "qwen3:1.7b"
 	}
 	return &Selector{
 		STT: &WhisperSTT{BaseURL: inf, HTTP: &http.Client{Timeout: defaultTimeout}},

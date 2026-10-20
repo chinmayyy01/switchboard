@@ -82,11 +82,9 @@ async def tts(request: Request):
         raise HTTPException(400, "text required")
 
     voice = piper()
-    chunks = []
-    for raw in voice.synthesize_stream_raw(text):
-        chunks.append(raw)
+    chunks = [chunk.audio_int16_bytes for chunk in voice.synthesize(text)]
     pcm = np.frombuffer(b"".join(chunks), dtype=np.int16)
 
-    sr = getattr(getattr(voice, "config", None), "sample_rate", SAMPLE_RATE)
+    sr = int(getattr(voice.config, "sample_rate", SAMPLE_RATE))
     pcm = _resample(pcm, sr)
     return Response(content=pcm.tobytes(), media_type="application/octet-stream")
