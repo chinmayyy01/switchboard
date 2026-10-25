@@ -1,19 +1,11 @@
-"""Switchboard inference sidecar: STT (faster-whisper) + TTS (Piper).
-
-Exposes the two model seams the Go service needs, over plain HTTP:
-  POST /stt?lang=   raw PCM s16le mono 16k body  ->  {text, lang, confidence}
-  POST /tts         {text, lang}                 ->  raw PCM s16le mono 16k
-  GET  /health
-
-Models are lazy-loaded on first use so the service starts fast.
-"""
-
 import os
 from functools import lru_cache
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+
+from rag import EMBED_MODEL, KNOWLEDGE_DIR, embed_text, retrieve
 
 SAMPLE_RATE = 16000
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
@@ -42,7 +34,7 @@ def piper():
     return PiperVoice.load(PIPER_VOICE)
 
 
-def _resample(pcm: np.ndarray, sr: int, target: int = SAMPLE_RATE) -> np.ndarray:
+def _resample(pcm, sr, target=SAMPLE_RATE):
     if sr == target or len(pcm) == 0:
         return pcm
     xi = np.linspace(0, len(pcm) - 1, int(len(pcm) * target / sr))
@@ -56,6 +48,8 @@ def health():
         "whisper_model": WHISPER_MODEL,
         "piper_voice": PIPER_VOICE or None,
         "sample_rate": SAMPLE_RATE,
+        "embed_model": EMBED_MODEL,
+        "knowledge_dir": KNOWLEDGE_DIR,
     }
 
 
@@ -88,3 +82,25 @@ async def tts(request: Request):
     sr = int(getattr(voice.config, "sample_rate", SAMPLE_RATE))
     pcm = _resample(pcm, sr)
     return Response(content=pcm.tobytes(), media_type="application/octet-stream")
+
+
+@app.post("/embed")
+async def embed_endpoint(request: Request):
+    data = await request.json()
+    text = data.get("text", "")
+    if not text:
+        raise HTTPException(400, "text required")
+    vec = embed_text(text)
+    if vec is None:
+        raise HTTPException(503, "embedding unavailable (is ollama running?)")
+    return {"embedding": vec}
+
+
+@app.post("/retrieve")
+async def retrieve_endpoint(request: Request):
+    data = await request.json()
+    tenant = data.get("tenant", "")
+    query = data.get("query", "")
+    if not tenant or not query:
+        raise HTTPException(400, "tenant and query required")
+    return retrieve(tenant, query, int(data.get("k", 3)), data.get("types"))
