@@ -13,6 +13,7 @@ import (
 
 	"github.com/chinmay/switchboard/internal/api"
 	"github.com/chinmay/switchboard/internal/hub"
+	"github.com/chinmay/switchboard/internal/jobs"
 	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/store"
 	"github.com/chinmay/switchboard/internal/ws"
@@ -31,9 +32,10 @@ func main() {
 	h := hub.New()
 	st := store.New(*dataDir, 500)
 	reg := ws.NewBridgeRegistry()
+	js := jobs.NewStore()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", ws.Handler(h, st, reg, ctx))
+	mux.HandleFunc("/ws", ws.Handler(h, st, reg, js, ctx))
 	mux.HandleFunc("/ws/supervisor", ws.SupervisorHandler(h, token, ctx))
 	mux.HandleFunc("/ws/supervisor/call", ws.SupervisorCallHandler(reg, h, token, ctx))
 	mux.Handle("/metrics", metrics.Handler())

@@ -17,8 +17,10 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/chinmay/switchboard/internal/agent"
+	"github.com/chinmay/switchboard/internal/booking"
 	"github.com/chinmay/switchboard/internal/hub"
 	"github.com/chinmay/switchboard/internal/inference"
+	"github.com/chinmay/switchboard/internal/jobs"
 	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/store"
 )
@@ -39,7 +41,7 @@ func authorized(r *http.Request, token string) bool {
 	return r.Header.Get("X-Supervisor-Token") == token
 }
 
-func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, base context.Context) http.HandlerFunc {
+func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, js *jobs.Store, base context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, acceptOpts)
 		if err != nil {
@@ -47,7 +49,7 @@ func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, base context.Cont
 			return
 		}
 		defer c.CloseNow()
-		if err := run(base, c, h, st, reg); err != nil {
+		if err := run(base, c, h, st, reg, js); err != nil {
 			log.Printf("ws session ended: %v", err)
 		}
 	}
@@ -128,7 +130,7 @@ type callMsg struct {
 	pcm     []int16
 }
 
-func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, reg *BridgeRegistry) error {
+func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, reg *BridgeRegistry, js *jobs.Store) error {
 	c.SetReadLimit(64 * 1024)
 
 	callID := newCallID()
@@ -149,7 +151,7 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 	br.setCaller(w)
 	defer br.clearCaller(w)
 
-	sess := agent.NewSession(sel, agent.FakeBrain{}, wsSink{w: w, hub: h, callID: callID})
+	sess := agent.NewSession(sel, booking.New(js), wsSink{w: w, hub: h, callID: callID})
 	h.SetControl(callID, func() { sess.SetHumanOwned(true) })
 
 	msgs := make(chan callMsg, frameQueue)

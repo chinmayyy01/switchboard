@@ -17,9 +17,11 @@ type FakeSTT struct {
 
 func NewFakeSTT() *FakeSTT {
 	return &FakeSTT{Script: []Utterance{
-		{Text: "my kitchen sink is leaking badly, I need someone today", Lang: "en"},
-		{Text: "कल सुबह आ सकते हो?", Lang: "hi"},
-		{Text: "yes please book that slot", Lang: "en"},
+		{Text: "my kitchen sink is leaking badly", Lang: "en"},
+		{Text: "12 Main Street", Lang: "en"},
+		{Text: "tomorrow morning", Lang: "en"},
+		{Text: "5551234567", Lang: "en"},
+		{Text: "yes", Lang: "en"},
 	}}
 }
 
