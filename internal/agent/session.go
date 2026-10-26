@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chinmay/switchboard/internal/escalate"
+	"github.com/chinmay/switchboard/internal/guard"
 	"github.com/chinmay/switchboard/internal/metrics"
 )
 
@@ -92,6 +93,16 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 		return err
 	}
 
+	if guard.LooksLikeInjection(tr.Text) {
+		s.escalated = true
+		s.escalationReason = "prompt_injection"
+		metrics.Escalation()
+		if err := s.sink.EventJSON(map[string]any{"type": "guardrail", "kind": "prompt_injection"}); err != nil {
+			return err
+		}
+		return s.sink.EventJSON(map[string]any{"type": "escalation", "reason": "prompt_injection"})
+	}
+
 	sig := s.tracker.Observe(tr.Text, tr.Confidence)
 	if dec := s.policy.Decide(sig); dec.Escalate {
 		s.escalated = true
@@ -113,6 +124,19 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	}
 	metrics.ObserveStage("brain", time.Since(t1))
 
+	if out.Escalate && !s.escalated {
+		s.escalated = true
+		reason := out.EndReason
+		if reason == "" {
+			reason = "policy"
+		}
+		s.escalationReason = reason
+		metrics.Escalation()
+		if err := s.sink.EventJSON(map[string]any{"type": "escalation", "reason": reason}); err != nil {
+			return err
+		}
+	}
+
 	if out.ToolCalled != nil {
 		if err := s.sink.EventJSON(map[string]any{
 			"type": "tool.call", "name": out.ToolCalled.Name, "args": out.ToolCalled.Args,
@@ -127,6 +151,12 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	}
 	if err := s.sink.EventJSON(map[string]any{"type": "agent.text", "text": out.Reply}); err != nil {
 		return err
+	}
+
+	if len(out.Citations) > 0 {
+		if err := s.sink.EventJSON(map[string]any{"type": "citation", "docs": out.Citations}); err != nil {
+			return err
+		}
 	}
 
 	if err := s.sink.EventJSON(map[string]any{"type": "agent.speaking"}); err != nil {

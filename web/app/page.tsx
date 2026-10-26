@@ -14,6 +14,7 @@ export default function Page() {
     agentState,
     agentLang,
     tool,
+    citations,
     latency,
     startCall,
     endCall,
@@ -97,6 +98,11 @@ export default function Page() {
           {agentText || "…"}
         </p>
         {tool && <p className="text-xs text-neutral-400">tool: {tool}</p>}
+        {citations.length > 0 && (
+          <p className="text-xs text-neutral-400">
+            sources: {citations.join(", ")}
+          </p>
+        )}
       </div>
     </main>
   );

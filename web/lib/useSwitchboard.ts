@@ -16,6 +16,7 @@ type ServerEvent = {
   brain_ms?: number;
   tts_ms?: number;
   turn_ms?: number;
+  docs?: string[];
 };
 
 export function useSwitchboard() {
@@ -27,6 +28,7 @@ export function useSwitchboard() {
   const [agentState, setAgentState] = useState("");
   const [agentLang, setAgentLang] = useState("");
   const [tool, setTool] = useState("");
+  const [citations, setCitations] = useState<string[]>([]);
   const [latency, setLatency] = useState<{
     stt: number;
     brain: number;
@@ -98,6 +100,9 @@ export function useSwitchboard() {
           break;
         case "tool.call":
           setTool(msg.name ?? "");
+          break;
+        case "citation":
+          setCitations(msg.docs ?? []);
           break;
         case "latency":
           setLatency({
@@ -196,6 +201,7 @@ export function useSwitchboard() {
     setAgentState("");
     setAgentLang("");
     setTool("");
+    setCitations([]);
     setLatency(null);
   }, []);
 
@@ -217,6 +223,7 @@ export function useSwitchboard() {
     agentState,
     agentLang,
     tool,
+    citations,
     latency,
     startCall,
     endCall,

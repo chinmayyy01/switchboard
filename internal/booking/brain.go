@@ -9,8 +9,13 @@ import (
 	"time"
 
 	"github.com/chinmay/switchboard/internal/agent"
+	"github.com/chinmay/switchboard/internal/ai"
 	"github.com/chinmay/switchboard/internal/jobs"
 )
+
+type Knowledge interface {
+	Retrieve(ctx context.Context, tenant, query string, k int, types []string) (ai.RetrieveResponse, error)
+}
 
 var (
 	emergencyWords  = []string{"gas", "flood", "burst", "sewage", "carbon monoxide", "electrical", "sparking", "burning", "no heat"}
@@ -19,6 +24,7 @@ var (
 	rescheduleWords = []string{"reschedule", "change my appointment", "change the appointment", "move my appointment", "move the booking", "change my booking"}
 	yesWords        = []string{"yes", "yeah", "yep", "sure", "correct", "confirm", "go ahead", "that works", "please do", "ok", "okay"}
 	noWords         = []string{"no", "nope", "not", "don't", "do not", "different", "another"}
+	faqWords        = []string{"hours", "open", "close", "closed", "price", "pricing", "cost", "charge", "fee", "how much", "serve", "service area", "warranty", "guarantee", "policy", "refund", "insurance", "cover", "district", "discount", "senior", "payment", "cash", "card"}
 )
 
 var serviceWords = []struct {
@@ -37,12 +43,14 @@ var serviceWords = []struct {
 
 var (
 	isoRe      = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
-	phoneRe    = regexp.MustCompile(`[\d][\d\s\-()]{6,}`)
 	questionRe = regexp.MustCompile(`^(what|where|when|who|why|how|do|does|can|could|is|are|will)\b`)
 )
 
 type Brain struct {
 	store      *jobs.Store
+	sel        agent.Selector
+	kb         Knowledge
+	tenant     string
 	state      string
 	service    string
 	address    string
@@ -54,13 +62,22 @@ type Brain struct {
 	phoneTries int
 }
 
-func New(store *jobs.Store) *Brain {
-	return &Brain{store: store, state: "greet"}
+func New(store *jobs.Store, sel agent.Selector, kb Knowledge, tenant string) *Brain {
+	return &Brain{store: store, sel: sel, kb: kb, tenant: tenant, state: "greet"}
 }
 
-func (b *Brain) Handle(_ context.Context, turn agent.Turn) (agent.Outcome, error) {
+func (b *Brain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, error) {
 	text := strings.TrimSpace(turn.UserText)
 	low := strings.ToLower(text)
+
+	switch {
+	case hasAny(low, emergencyWords):
+		return b.escalate("This sounds like an emergency. I'm connecting you to a person now.", "emergency"), nil
+	case hasAny(low, humanWords):
+		return b.escalate("Of course, connecting you to a person.", "caller_requested_human"), nil
+	case hasAny(low, faqWords):
+		return b.answerFAQ(ctx, text, turn.Lang)
+	}
 
 	switch b.state {
 	case "", "greet":
@@ -86,15 +103,11 @@ func (b *Brain) Handle(_ context.Context, turn agent.Turn) (agent.Outcome, error
 	case "resched_confirm":
 		return b.reschedConfirm(low)
 	}
-	return b.out("Sorry, let me connect you to a person.", "escalate", nil, true, "escalated"), nil
+	return b.escalate("Sorry, let me connect you to a person.", "policy"), nil
 }
 
 func (b *Brain) greet(low, text string) (agent.Outcome, error) {
 	switch {
-	case hasAny(low, emergencyWords):
-		return b.out("This sounds like an emergency. I'm connecting you to a person now.", "escalate", nil, true, "escalated"), nil
-	case hasAny(low, humanWords):
-		return b.out("Of course, connecting you to a person.", "escalate", nil, true, "escalated"), nil
 	case hasAny(low, cancelWords):
 		return b.out("I can cancel that. What's the phone number on the booking?", "cancel_phone", nil, false, ""), nil
 	case hasAny(low, rescheduleWords):
@@ -108,9 +121,6 @@ func (b *Brain) greet(low, text string) (agent.Outcome, error) {
 }
 
 func (b *Brain) serviceStep(low, text string) (agent.Outcome, error) {
-	if hasAny(low, emergencyWords) {
-		return b.out("That's an emergency. I'm connecting you to a person now.", "escalate", nil, true, "escalated"), nil
-	}
 	svc := classifyService(low)
 	if svc == "" {
 		svc = clean(text)
@@ -214,7 +224,7 @@ func (b *Brain) cancelPhone(low string) (agent.Outcome, error) {
 	if len(found) == 0 {
 		b.phoneTries++
 		if b.phoneTries >= 2 {
-			return b.out("I can't find that booking. Let me connect you to a person.", "escalate", nil, true, "escalated"), nil
+			return b.escalate("I can't find that booking. Let me connect you to a person.", "not_found"), nil
 		}
 		return b.out("I couldn't find a booking for that number. Can you confirm it?", "cancel_phone", nil, false, ""), nil
 	}
@@ -234,7 +244,7 @@ func (b *Brain) cancelConfirm(low string) (agent.Outcome, error) {
 	switch {
 	case isYes(low):
 		if err := b.store.Cancel(b.jobID); err != nil {
-			return b.out("I couldn't cancel that. Let me connect you to a person.", "escalate", nil, true, "escalated"), nil
+			return b.escalate("I couldn't cancel that. Let me connect you to a person.", "tool_error"), nil
 		}
 		return b.out("Cancelled. Anything else?", "done", toolCall("cancel", map[string]any{"id": b.jobID}), true, "cancelled"), nil
 	case isNo(low):
@@ -252,7 +262,7 @@ func (b *Brain) reschedPhone(low string) (agent.Outcome, error) {
 	if len(found) == 0 {
 		b.phoneTries++
 		if b.phoneTries >= 2 {
-			return b.out("I can't find that booking. Let me connect you to a person.", "escalate", nil, true, "escalated"), nil
+			return b.escalate("I can't find that booking. Let me connect you to a person.", "not_found"), nil
 		}
 		return b.out("I couldn't find a booking for that number. Can you confirm it?", "resched_phone", nil, false, ""), nil
 	}
@@ -294,7 +304,7 @@ func (b *Brain) reschedConfirm(low string) (agent.Outcome, error) {
 	switch {
 	case isYes(low):
 		if err := b.store.Reschedule(b.jobID, b.date, b.window); err != nil {
-			return b.out("I couldn't move that booking. Let me connect you to a person.", "escalate", nil, true, "escalated"), nil
+			return b.escalate("I couldn't move that booking. Let me connect you to a person.", "tool_error"), nil
 		}
 		return b.out("Moved. Anything else?", "done", toolCall("reschedule", map[string]any{"id": b.jobID, "date": b.date, "window": b.window}), true, "rescheduled"), nil
 	case isNo(low):
@@ -303,17 +313,161 @@ func (b *Brain) reschedConfirm(low string) (agent.Outcome, error) {
 	return b.out("Shall I move it? Yes or no.", "resched_confirm", nil, false, ""), nil
 }
 
+func (b *Brain) answerFAQ(ctx context.Context, question, lang string) (agent.Outcome, error) {
+	if b.kb == nil {
+		return b.escalate("I'd rather not guess on that. Let me connect you to a person.", "ungrounded"), nil
+	}
+	res, err := b.kb.Retrieve(ctx, b.tenant, question, 3, nil)
+	if err != nil || !res.Grounded || len(res.Results) == 0 {
+		return b.escalate("I'm not sure about that. Let me connect you to a person.", "ungrounded"), nil
+	}
+	answer := b.synthesize(ctx, lang, question, buildContext(res.Results))
+	if answer == "" {
+		return b.escalate("I'm not sure about that. Let me connect you to a person.", "ungrounded"), nil
+	}
+	return agent.Outcome{
+		Reply:      answer,
+		State:      "faq",
+		ToolCalled: toolCall("lookup_policy", map[string]any{"query": question}),
+		Citations:  citations(res.Results),
+	}, nil
+}
+
+func (b *Brain) synthesize(ctx context.Context, lang, question, contextText string) string {
+	if b.sel == nil {
+		return ""
+	}
+	llm := b.sel.Select(lang).LLM
+	if llm == nil {
+		return ""
+	}
+	msgs := []agent.Message{
+		{Role: "system", Content: "Quote the single sentence from the context that answers the caller's question. Reply with that sentence only. If the context does not answer it, reply exactly: NONE."},
+		{Role: "user", Content: "Context:\n" + contextText + "\n\nCaller: " + question},
+	}
+	reply, err := llm.Respond(ctx, msgs, nil)
+	if err != nil {
+		return bestSentence(question, contextText)
+	}
+	answer := strings.TrimSpace(reply.Text)
+	low := strings.ToLower(strings.Trim(answer, " .!\"'"))
+	if answer == "" || low == "none" || strings.HasPrefix(low, "none ") || looksImperative(answer) {
+		answer = bestSentence(question, contextText)
+	}
+	if answer == "" || looksImperative(answer) {
+		return ""
+	}
+	if strings.Contains(answer, "$") || strings.Contains(strings.ToLower(answer), "dollar") {
+		ctxLow := strings.ToLower(contextText)
+		if !strings.Contains(contextText, "$") && !strings.Contains(ctxLow, "dollar") {
+			return ""
+		}
+	}
+	return answer
+}
+
+var imperativePrefixes = []string{
+	"never ", "do not ", "don't ", "always ", "tell ", "offer ",
+	"waive ", "transfer ", "escalate", "if a caller", "for an emergency",
+}
+
+func looksImperative(s string) bool {
+	low := strings.ToLower(strings.TrimSpace(s))
+	for _, p := range imperativePrefixes {
+		if strings.HasPrefix(low, p) {
+			return true
+		}
+	}
+	return false
+}
+
+var stopwords = map[string]bool{
+	"do": true, "you": true, "your": true, "the": true, "a": true, "an": true,
+	"is": true, "are": true, "what": true, "how": true, "much": true, "we": true,
+	"i": true, "to": true, "of": true, "for": true, "and": true, "on": true,
+	"in": true, "at": true, "it": true, "this": true, "that": true, "can": true,
+	"does": true, "with": true, "my": true, "there": true, "any": true,
+}
+
+func contentTokens(text string) map[string]bool {
+	set := map[string]bool{}
+	for _, t := range regexp.MustCompile(`[a-z0-9]+`).FindAllString(strings.ToLower(text), -1) {
+		if len(t) > 1 && !stopwords[t] {
+			set[t] = true
+		}
+	}
+	return set
+}
+
+func splitSentences(text string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '.', '?', '!':
+			out = append(out, strings.TrimSpace(text[start:i+1]))
+			start = i + 1
+		}
+	}
+	if start < len(text) {
+		out = append(out, strings.TrimSpace(text[start:]))
+	}
+	return out
+}
+
+func bestSentence(question, contextText string) string {
+	q := contentTokens(question)
+	if len(q) == 0 {
+		return ""
+	}
+	best := ""
+	bestScore := 0.0
+	for _, s := range splitSentences(contextText) {
+		st := contentTokens(s)
+		hits := 0
+		for t := range q {
+			if st[t] {
+				hits++
+			}
+		}
+		score := float64(hits) / float64(len(q))
+		if score > bestScore {
+			bestScore = score
+			best = s
+		}
+	}
+	if bestScore >= 0.3 {
+		return best
+	}
+	return ""
+}
+
+func (b *Brain) escalate(reply, reason string) agent.Outcome {
+	b.state = "escalate"
+	return agent.Outcome{Reply: reply, State: "escalate", Escalate: true, EndCall: true, EndReason: reason}
+}
+
 func (b *Brain) out(reply, state string, tool *agent.ToolCall, end bool, reason string) agent.Outcome {
 	if state != "" {
 		b.state = state
 	}
-	return agent.Outcome{
-		Reply:      reply,
-		State:      b.state,
-		ToolCalled: tool,
-		EndCall:    end,
-		EndReason:  reason,
+	return agent.Outcome{Reply: reply, State: b.state, ToolCalled: tool, EndCall: end, EndReason: reason}
+}
+
+func buildContext(results []ai.Result) string {
+	parts := make([]string, 0, len(results))
+	for _, r := range results {
+		parts = append(parts, r.Text)
 	}
+	return strings.Join(parts, "\n---\n")
+}
+
+func citations(results []ai.Result) []string {
+	out := make([]string, 0, len(results))
+	for _, r := range results {
+		out = append(out, fmt.Sprintf("%s (%s)", r.Title, r.DocID))
+	}
+	return out
 }
 
 func classifyService(low string) string {
@@ -397,7 +551,7 @@ func containsWord(low, w string) bool {
 	if strings.Contains(w, " ") || strings.Contains(w, "-") {
 		return strings.Contains(low, w)
 	}
-	return regexp.MustCompile(`\b`+regexp.QuoteMeta(w)+`\b`).MatchString(low)
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(w) + `\b`).MatchString(low)
 }
 
 func hasAny(low string, words []string) bool {

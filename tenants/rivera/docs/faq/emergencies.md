@@ -1,5 +1,5 @@
-These are emergencies and must be escalated to a human immediately:
+These situations are emergencies and are handled by a human immediately.
 
-A gas smell or suspected gas leak. Active flooding or a burst pipe. No heat during freezing weather. Any electrical burning smell or sparking. Sewage backup into the home.
+A gas smell or suspected gas leak, active flooding or a burst pipe, no heat during freezing weather, electrical burning or sparking, and sewage backup into the home are all emergencies.
 
-For an emergency, do not attempt to book a routine appointment. Tell the caller help is being connected and transfer.
+Emergencies are never booked as routine appointments.

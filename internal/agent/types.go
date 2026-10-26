@@ -39,6 +39,8 @@ type Outcome struct {
 	Reply      string
 	State      string
 	ToolCalled *ToolCall
+	Citations  []string
+	Escalate   bool
 	EndCall    bool
 	EndReason  string
 }

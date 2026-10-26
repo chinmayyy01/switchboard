@@ -17,7 +17,9 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/chinmay/switchboard/internal/agent"
+	"github.com/chinmay/switchboard/internal/ai"
 	"github.com/chinmay/switchboard/internal/booking"
+	"github.com/chinmay/switchboard/internal/guard"
 	"github.com/chinmay/switchboard/internal/hub"
 	"github.com/chinmay/switchboard/internal/inference"
 	"github.com/chinmay/switchboard/internal/jobs"
@@ -151,7 +153,11 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 	br.setCaller(w)
 	defer br.clearCaller(w)
 
-	sess := agent.NewSession(sel, booking.New(js), wsSink{w: w, hub: h, callID: callID})
+	var kb booking.Knowledge
+	if c := ai.NewFromEnv(); c != nil {
+		kb = c
+	}
+	sess := agent.NewSession(sel, booking.New(js, sel, kb, "rivera"), wsSink{w: w, hub: h, callID: callID})
 	h.SetControl(callID, func() { sess.SetHumanOwned(true) })
 
 	msgs := make(chan callMsg, frameQueue)
@@ -287,7 +293,7 @@ func (s wsSink) EventJSON(v any) error {
 		case "stt.final":
 			if t, ok := m["text"].(string); ok {
 				s.hub.SetText(s.callID, t)
-				s.hub.AddTurn(s.callID, "caller", t)
+				s.hub.AddTurn(s.callID, "caller", guard.Redact(t))
 			}
 			if l, ok := m["lang"].(string); ok {
 				s.hub.SetLang(s.callID, l)
