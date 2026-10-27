@@ -153,11 +153,11 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 	br.setCaller(w)
 	defer br.clearCaller(w)
 
-	var kb booking.Knowledge
+	var kb booking.Answerer
 	if c := ai.NewFromEnv(); c != nil {
 		kb = c
 	}
-	sess := agent.NewSession(sel, booking.New(js, sel, kb, "rivera"), wsSink{w: w, hub: h, callID: callID})
+	sess := agent.NewSession(sel, booking.New(js, kb, "rivera"), wsSink{w: w, hub: h, callID: callID})
 	h.SetControl(callID, func() { sess.SetHumanOwned(true) })
 
 	msgs := make(chan callMsg, frameQueue)

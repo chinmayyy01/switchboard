@@ -27,6 +27,7 @@ ingest:
 
 eval:
 	go run ./cmd/eval
+	$(PY) inference/eval_rag.py --tenant rivera --k 3 --gate
 
 load:
 	go run ./cmd/loadgen -n 50

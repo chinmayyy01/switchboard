@@ -28,6 +28,7 @@ func oneCall(ctx context.Context, url string) (int64, error) {
 		return 0, err
 	}
 	defer c.CloseNow()
+	c.SetReadLimit(1 << 20)
 
 	if err := c.Write(ctx, websocket.MessageText, []byte(`{"type":"call.start","lang":"en"}`)); err != nil {
 		return 0, err

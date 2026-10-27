@@ -13,6 +13,7 @@ HTTP via `internal/inference` and `internal/ai`.
 | `POST /tts` | `{text, lang}` | raw PCM s16le mono 16k |
 | `POST /embed` | `{text}` | `{embedding: [768 floats]}` |
 | `POST /retrieve` | `{tenant, query, k, types?}` | `{grounded, top_score, results[]}` |
+| `POST /answer` | `{tenant, query, k, lang}` | `{grounded, answer, citations, top_score}` |
 | `GET /health` | — | model + config info |
 
 ## Setup
@@ -61,6 +62,8 @@ Without `INFERENCE_URL`, the Go service falls back to the fakes.
 
 ## Retrieval behaviour
 
+- `/answer` is the grounded answering path: retrieve → extractive prompt to
+  Ollama → deterministic best-sentence fallback → citations. Go only calls it.
 - Tenant is a **hard filter**; an unknown tenant returns no results.
 - Score = `0.6·cosine + 0.4·bm25`; `grounded` requires
   `vector ≥ 0.55` and `score ≥ 0.45` (BM25-only fallback: `score ≥ 0.5`).

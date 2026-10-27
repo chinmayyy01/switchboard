@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
 from rag import EMBED_MODEL, KNOWLEDGE_DIR, embed_text, retrieve
+from answer import answer as answer_query
 
 SAMPLE_RATE = 16000
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
@@ -104,3 +105,13 @@ async def retrieve_endpoint(request: Request):
     if not tenant or not query:
         raise HTTPException(400, "tenant and query required")
     return retrieve(tenant, query, int(data.get("k", 3)), data.get("types"))
+
+
+@app.post("/answer")
+async def answer_endpoint(request: Request):
+    data = await request.json()
+    tenant = data.get("tenant", "")
+    query = data.get("query", "")
+    if not tenant or not query:
+        raise HTTPException(400, "tenant and query required")
+    return answer_query(tenant, query, int(data.get("k", 3)))

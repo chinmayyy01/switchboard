@@ -10,26 +10,14 @@ import (
 	"github.com/chinmay/switchboard/internal/jobs"
 )
 
-type stubLLM struct{ reply string }
+type stubKB struct{ res ai.AnswerResponse }
 
-func (s stubLLM) Respond(_ context.Context, _ []agent.Message, _ []agent.Tool) (agent.Reply, error) {
-	return agent.Reply{Text: s.reply}, nil
-}
-
-type stubSelector struct{ llm agent.LLM }
-
-func (s stubSelector) Select(string) agent.Providers {
-	return agent.Providers{STT: agent.NewFakeSTT(), TTS: agent.NewFakeTTS(), LLM: s.llm}
-}
-
-type stubKB struct{ res ai.RetrieveResponse }
-
-func (s stubKB) Retrieve(_ context.Context, _, _ string, _ int, _ []string) (ai.RetrieveResponse, error) {
+func (s stubKB) Answer(_ context.Context, _, _ string, _ int, _ string) (ai.AnswerResponse, error) {
 	return s.res, nil
 }
 
 func newBrain(st *jobs.Store) *Brain {
-	return New(st, agent.NewFakeSelector(), nil, "rivera")
+	return New(st, nil, "rivera")
 }
 
 func run(t *testing.T, b *Brain, text string) agent.Outcome {
@@ -111,19 +99,12 @@ func TestRescheduleFlow(t *testing.T) {
 }
 
 func TestFAQGroundsAndCites(t *testing.T) {
-	kb := stubKB{res: ai.RetrieveResponse{
-		Grounded: true,
-		TopScore: 0.8,
-		Results: []ai.Result{{
-			DocID: "faq/hours",
-			Title: "hours",
-			Type:  "faq",
-			Text:  "We are open Monday to Friday from eight to six.",
-			Score: 0.8,
-		}},
+	kb := stubKB{res: ai.AnswerResponse{
+		Grounded:  true,
+		Answer:    "We're open Monday to Friday, 8am to 6pm.",
+		Citations: []string{"hours (faq/hours)"},
 	}}
-	sel := stubSelector{llm: stubLLM{reply: "We're open Monday to Friday, 8am to 6pm."}}
-	b := New(jobs.NewStore(), sel, kb, "rivera")
+	b := New(jobs.NewStore(), kb, "rivera")
 
 	out := run(t, b, "what are your hours?")
 	if out.State != "faq" || out.Escalate {
@@ -138,9 +119,8 @@ func TestFAQGroundsAndCites(t *testing.T) {
 }
 
 func TestFAQAbstainsAndEscalates(t *testing.T) {
-	kb := stubKB{res: ai.RetrieveResponse{Grounded: false, TopScore: 0.2}}
-	sel := stubSelector{llm: stubLLM{reply: "should not be used"}}
-	b := New(jobs.NewStore(), sel, kb, "rivera")
+	kb := stubKB{res: ai.AnswerResponse{Grounded: false}}
+	b := New(jobs.NewStore(), kb, "rivera")
 
 	out := run(t, b, "do you offer a senior discount?")
 	if !out.Escalate || out.EndReason != "ungrounded" {
@@ -149,7 +129,7 @@ func TestFAQAbstainsAndEscalates(t *testing.T) {
 }
 
 func TestFAQWithoutKnowledgeEscalates(t *testing.T) {
-	b := New(jobs.NewStore(), agent.NewFakeSelector(), nil, "rivera")
+	b := New(jobs.NewStore(), nil, "rivera")
 	out := run(t, b, "what is your warranty?")
 	if !out.Escalate || out.EndReason != "ungrounded" {
 		t.Fatalf("expected ungrounded escalation, got %+v", out)
