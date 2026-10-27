@@ -83,6 +83,14 @@ func (s *Segmenter) flush() []int16 {
 	return out
 }
 
+func (s *Segmenter) Reset() {
+	s.pending = nil
+	s.inSpeech = false
+	s.silence = 0
+	s.speech = 0
+	s.buf = s.buf[:0]
+}
+
 func rms(frame []int16) float64 {
 	if len(frame) == 0 {
 		return 0

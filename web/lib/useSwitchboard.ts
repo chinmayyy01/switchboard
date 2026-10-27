@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8090/ws";
 const SAMPLE_RATE = 16000;
+const BARGE_RMS = 800;
+const BARGE_GRACE_MS = 250;
 
 type ServerEvent = {
   type?: string;
@@ -43,9 +45,25 @@ export function useSwitchboard() {
   const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const streamingRef = useRef(false);
-  const mutedRef = useRef(false);
+  const speakingRef = useRef(false);
+  const playSrcRef = useRef<AudioBufferSourceNode | null>(null);
+  const graceUntilRef = useRef(0);
   const seqRef = useRef(0);
   const inflightRef = useRef<Map<number, number>>(new Map());
+
+  const interrupt = useCallback(() => {
+    if (playSrcRef.current) {
+      try {
+        playSrcRef.current.stop();
+      } catch {
+        /* already stopped */
+      }
+      playSrcRef.current = null;
+    }
+    speakingRef.current = false;
+    setStatus("listening…");
+    wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
+  }, []);
 
   const playPCM = useCallback((buf: ArrayBuffer) => {
     const ctx = ctxRef.current;
@@ -58,16 +76,19 @@ export function useSwitchboard() {
     const audio = ctx.createBuffer(1, f32.length, SAMPLE_RATE);
     audio.copyToChannel(f32, 0);
 
-    mutedRef.current = true;
+    speakingRef.current = true;
+    graceUntilRef.current = performance.now() + BARGE_GRACE_MS;
     setStatus("agent speaking…");
 
     const src = ctx.createBufferSource();
     src.buffer = audio;
     src.connect(ctx.destination);
     src.onended = () => {
-      mutedRef.current = false;
+      if (playSrcRef.current === src) playSrcRef.current = null;
+      speakingRef.current = false;
       setStatus("listening…");
     };
+    playSrcRef.current = src;
     src.start();
   }, []);
 
@@ -112,9 +133,6 @@ export function useSwitchboard() {
             turn: msg.turn_ms ?? 0,
           });
           break;
-        case "agent.speaking":
-          mutedRef.current = true;
-          break;
       }
     },
     [playPCM],
@@ -146,7 +164,7 @@ export function useSwitchboard() {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
-        echoCancellation: false,
+        echoCancellation: true,
         noiseSuppression: false,
         autoGainControl: false,
       },
@@ -157,16 +175,19 @@ export function useSwitchboard() {
     const node = new AudioWorkletNode(ctx, "pcm-capture");
     node.port.onmessage = (e: MessageEvent<Int16Array>) => {
       const ws = wsRef.current;
-      if (!streamingRef.current || mutedRef.current) return;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(e.data as unknown as ArrayBuffer);
+      if (!streamingRef.current || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+      const speaking = speakingRef.current && performance.now() > graceUntilRef.current;
+      if (speaking && rms(e.data) > BARGE_RMS) {
+        interrupt();
       }
+      ws.send(e.data as unknown as ArrayBuffer);
     };
     source.connect(node);
     streamRef.current = stream;
     ctxRef.current = ctx;
     nodeRef.current = node;
-  }, []);
+  }, [interrupt]);
 
   const startCall = useCallback(
     async (lang: string) => {
@@ -184,7 +205,15 @@ export function useSwitchboard() {
 
   const endCall = useCallback(async () => {
     streamingRef.current = false;
-    mutedRef.current = false;
+    speakingRef.current = false;
+    if (playSrcRef.current) {
+      try {
+        playSrcRef.current.stop();
+      } catch {
+        /* already stopped */
+      }
+      playSrcRef.current = null;
+    }
     setInCall(false);
     if (pingTimerRef.current) clearInterval(pingTimerRef.current);
     wsRef.current?.close();
@@ -228,4 +257,14 @@ export function useSwitchboard() {
     startCall,
     endCall,
   };
+}
+
+function rms(i16: Int16Array): number {
+  if (i16.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < i16.length; i++) {
+    const v = i16[i];
+    sum += v * v;
+  }
+  return Math.sqrt(sum / i16.length);
 }

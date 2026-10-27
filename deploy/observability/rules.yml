@@ -1,0 +1,26 @@
+groups:
+  - name: switchboard
+    rules:
+      - alert: HighP95TurnLatency
+        expr: histogram_quantile(0.95, sum(rate(switchboard_turn_latency_seconds_bucket[5m])) by (le)) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 turn latency above 5s"
+
+      - alert: EscalationSpike
+        expr: increase(switchboard_escalations_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "unusual number of escalations in 5m"
+
+      - alert: DroppedFrames
+        expr: increase(switchboard_dropped_frames_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "audio frames dropped under backpressure"

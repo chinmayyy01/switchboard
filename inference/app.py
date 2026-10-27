@@ -4,15 +4,44 @@ from functools import lru_cache
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
-from rag import EMBED_MODEL, KNOWLEDGE_DIR, embed_text, retrieve
 from answer import answer as answer_query
+from rag import EMBED_MODEL, KNOWLEDGE_DIR, embed_text, retrieve
 
 SAMPLE_RATE = 16000
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 PIPER_VOICE = os.getenv("PIPER_VOICE", "")
 
 app = FastAPI(title="switchboard-inference")
+
+
+def _setup_otel(app):
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    mode = os.getenv("OTEL_TRACES")
+    if not endpoint and mode != "stdout":
+        return
+
+    from opentelemetry import trace
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.urllib import URLLibInstrumentor
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+
+    provider = TracerProvider(resource=Resource.create({"service.name": "switchboard-ai"}))
+    if endpoint:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    else:
+        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    trace.set_tracer_provider(provider)
+    FastAPIInstrumentor.instrument_app(app)
+    URLLibInstrumentor().instrument()
+
+
+_setup_otel(app)
 
 
 @lru_cache(maxsize=1)
@@ -42,6 +71,18 @@ def _resample(pcm, sr, target=SAMPLE_RATE):
     return np.interp(xi, np.arange(len(pcm)), pcm).astype(np.int16)
 
 
+def _transcribe(audio, lang):
+    segments, info = whisper().transcribe(audio, language=lang, beam_size=1)
+    text = "".join(s.text for s in segments).strip()
+    return text, info
+
+
+def _synthesize(text):
+    voice = piper()
+    chunks = [chunk.audio_int16_bytes for chunk in voice.synthesize(text)]
+    return b"".join(chunks), int(getattr(voice.config, "sample_rate", SAMPLE_RATE))
+
+
 @app.get("/health")
 def health():
     return {
@@ -60,8 +101,7 @@ async def stt(request: Request):
     body = await request.body()
     audio = np.frombuffer(body, dtype=np.int16).astype(np.float32) / 32768.0
 
-    segments, info = whisper().transcribe(audio, language=lang, beam_size=1)
-    text = "".join(s.text for s in segments).strip()
+    text, info = await run_in_threadpool(_transcribe, audio, lang)
     return {
         "text": text,
         "lang": info.language,
@@ -76,11 +116,8 @@ async def tts(request: Request):
     if not text:
         raise HTTPException(400, "text required")
 
-    voice = piper()
-    chunks = [chunk.audio_int16_bytes for chunk in voice.synthesize(text)]
-    pcm = np.frombuffer(b"".join(chunks), dtype=np.int16)
-
-    sr = int(getattr(voice.config, "sample_rate", SAMPLE_RATE))
+    raw, sr = await run_in_threadpool(_synthesize, text)
+    pcm = np.frombuffer(raw, dtype=np.int16)
     pcm = _resample(pcm, sr)
     return Response(content=pcm.tobytes(), media_type="application/octet-stream")
 
@@ -91,7 +128,7 @@ async def embed_endpoint(request: Request):
     text = data.get("text", "")
     if not text:
         raise HTTPException(400, "text required")
-    vec = embed_text(text)
+    vec = await run_in_threadpool(embed_text, text)
     if vec is None:
         raise HTTPException(503, "embedding unavailable (is ollama running?)")
     return {"embedding": vec}
@@ -104,7 +141,7 @@ async def retrieve_endpoint(request: Request):
     query = data.get("query", "")
     if not tenant or not query:
         raise HTTPException(400, "tenant and query required")
-    return retrieve(tenant, query, int(data.get("k", 3)), data.get("types"))
+    return await run_in_threadpool(retrieve, tenant, query, int(data.get("k", 3)), data.get("types"))
 
 
 @app.post("/answer")
@@ -114,4 +151,4 @@ async def answer_endpoint(request: Request):
     query = data.get("query", "")
     if not tenant or not query:
         raise HTTPException(400, "tenant and query required")
-    return answer_query(tenant, query, int(data.get("k", 3)))
+    return await run_in_threadpool(answer_query, tenant, query, int(data.get("k", 3)))

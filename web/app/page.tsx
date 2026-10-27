@@ -26,8 +26,8 @@ export default function Page() {
     <main className="mx-auto max-w-2xl px-6 py-16 font-mono leading-relaxed">
       <h1 className="text-2xl font-semibold">Switchboard · Phase 1</h1>
       <p className="mt-1 text-sm text-neutral-500">
-        Home-services reception (plumbing/HVAC) — just talk; the agent detects
-        your language and answers.
+        Home-services reception (plumbing/HVAC) — just talk; you can interrupt
+        anytime.
       </p>
       <Link href="/supervisor" className="text-sm text-blue-600 hover:underline">
         supervisor view →

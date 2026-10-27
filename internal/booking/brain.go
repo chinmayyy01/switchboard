@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -183,14 +184,14 @@ func (b *Brain) timeStep(low, text string) (agent.Outcome, error) {
 }
 
 func (b *Brain) phoneStep(_ string, text string) (agent.Outcome, error) {
-	p := jobs.NormalizePhone(text)
-	if len(p) < 7 {
-		return b.out("What's the best callback number? Digits only, please.", "phone", nil, false, ""), nil
+	p := validPhone(digitsFromSpeech(text))
+	if p == "" {
+		return b.out("I need a 10-digit callback number, including the area code. Could you say it again?", "phone", nil, false, ""), nil
 	}
 	b.phone = p
 	args := map[string]any{"service": b.service, "address": b.address, "date": b.date, "window": b.window}
 	return b.out(
-		fmt.Sprintf("To confirm: %s at %s on %s, %s window, callback %s. Shall I book it?", b.service, b.address, prettyDate(b.date), b.window, b.phone),
+		fmt.Sprintf("To confirm: %s at %s on %s, %s window, callback %s. Shall I book it?", b.service, b.address, prettyDate(b.date), b.window, speakPhone(b.phone)),
 		"confirm", toolCall("check_availability", args), false, "",
 	), nil
 }
@@ -215,9 +216,9 @@ func (b *Brain) confirmStep(low string) (agent.Outcome, error) {
 }
 
 func (b *Brain) cancelPhone(low string) (agent.Outcome, error) {
-	p := jobs.NormalizePhone(low)
-	if len(p) < 7 {
-		return b.out("What's the phone number on the booking?", "cancel_phone", nil, false, ""), nil
+	p := validPhone(digitsFromSpeech(low))
+	if p == "" {
+		return b.out("What's the 10-digit phone number on the booking?", "cancel_phone", nil, false, ""), nil
 	}
 	found := b.store.ByPhone(p)
 	if len(found) == 0 {
@@ -253,9 +254,9 @@ func (b *Brain) cancelConfirm(low string) (agent.Outcome, error) {
 }
 
 func (b *Brain) reschedPhone(low string) (agent.Outcome, error) {
-	p := jobs.NormalizePhone(low)
-	if len(p) < 7 {
-		return b.out("What's the phone number on the booking?", "resched_phone", nil, false, ""), nil
+	p := validPhone(digitsFromSpeech(low))
+	if p == "" {
+		return b.out("What's the 10-digit phone number on the booking?", "resched_phone", nil, false, ""), nil
 	}
 	found := b.store.ByPhone(p)
 	if len(found) == 0 {
@@ -358,16 +359,165 @@ func serviceMatch(low, w string) bool {
 	return strings.Contains(low, w)
 }
 
-func parseDate(low string, now time.Time) string {
-	if m := isoRe.FindString(low); m != "" {
-		return m
+var numberWords = map[string]byte{
+	"zero": '0', "oh": '0', "one": '1', "two": '2', "to": '2', "too": '2',
+	"three": '3', "four": '4', "for": '4', "five": '5', "six": '6',
+	"seven": '7', "eight": '8', "ate": '8', "nine": '9',
+}
+
+func digitsFromSpeech(text string) string {
+	low := strings.ToLower(text)
+	hasDigit := false
+	for _, r := range low {
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+			break
+		}
 	}
-	if strings.Contains(low, "today") {
-		return now.Format("2006-01-02")
+
+	var b strings.Builder
+	for _, tok := range strings.FieldsFunc(low, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	}) {
+		if tok == "" {
+			continue
+		}
+		isNum := true
+		for _, r := range tok {
+			if r < '0' || r > '9' {
+				isNum = false
+				break
+			}
+		}
+		if isNum {
+			b.WriteString(tok)
+			continue
+		}
+		if !hasDigit {
+			if d, ok := numberWords[tok]; ok {
+				b.WriteByte(d)
+			}
+		}
 	}
-	if strings.Contains(low, "tomorrow") {
-		return now.AddDate(0, 0, 1).Format("2006-01-02")
+	return b.String()
+}
+
+func validPhone(p string) string {
+	if len(p) == 11 && p[0] == '1' {
+		p = p[1:]
 	}
+	if len(p) != 10 {
+		return ""
+	}
+	return p
+}
+
+func speakPhone(p string) string {
+	if len(p) != 10 {
+		return p
+	}
+	parts := make([]string, 0, 10)
+	for _, r := range p {
+		parts = append(parts, string(r))
+	}
+	return strings.Join(parts, " ")
+}
+
+func dateOnly(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
+var inDaysRe = regexp.MustCompile(`in\s+(\d+)\s+(day|days|week|weeks)`)
+
+func parseInDays(low string, now time.Time) string {
+	m := inDaysRe.FindStringSubmatch(low)
+	if m == nil {
+		return ""
+	}
+	n := atoi(m[1])
+	if strings.HasPrefix(m[2], "week") {
+		n *= 7
+	}
+	return now.AddDate(0, 0, n).Format("2006-01-02")
+}
+
+func monthFrom(s string) (time.Month, bool) {
+	months := map[string]time.Month{
+		"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+		"jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+	}
+	if len(s) < 3 {
+		return 0, false
+	}
+	m, ok := months[s[:3]]
+	return m, ok
+}
+
+var monthFirstRe = regexp.MustCompile(`\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})\b`)
+var dayFirstRe = regexp.MustCompile(`\b(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b`)
+
+func parseMonthDay(low string, now time.Time) string {
+	day := 0
+	var mon time.Month
+
+	if m := monthFirstRe.FindStringSubmatch(low); m != nil {
+		mm, ok := monthFrom(m[1])
+		if !ok {
+			return ""
+		}
+		mon, day = mm, atoi(m[2])
+	} else if m := dayFirstRe.FindStringSubmatch(low); m != nil {
+		mm, ok := monthFrom(m[2])
+		if !ok {
+			return ""
+		}
+		mon, day = mm, atoi(m[1])
+	} else {
+		return ""
+	}
+
+	if day < 1 || day > 31 {
+		return ""
+	}
+	t := time.Date(now.Year(), mon, day, 0, 0, 0, 0, now.Location())
+	if t.Day() != day {
+		return ""
+	}
+	if t.Before(dateOnly(now)) {
+		t = time.Date(now.Year()+1, mon, day, 0, 0, 0, 0, now.Location())
+	}
+	return t.Format("2006-01-02")
+}
+
+var ordinalRe = regexp.MustCompile(`\b(\d{1,2})(?:st|nd|rd|th)\b`)
+
+func parseOrdinal(low string, now time.Time) string {
+	m := ordinalRe.FindStringSubmatch(low)
+	if m == nil {
+		return ""
+	}
+	day := atoi(m[1])
+	if day < 1 || day > 31 {
+		return ""
+	}
+	for i := 0; i < 12; i++ {
+		t := time.Date(now.Year(), now.Month()+time.Month(i), day, 0, 0, 0, 0, now.Location())
+		if t.Day() != day {
+			continue
+		}
+		if !t.Before(dateOnly(now)) {
+			return t.Format("2006-01-02")
+		}
+	}
+	return ""
+}
+
+func parseWeekday(low string, now time.Time) string {
 	days := []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
 	for i, d := range days {
 		if containsWord(low, d) {
@@ -379,6 +529,30 @@ func parseDate(low string, now time.Time) string {
 		}
 	}
 	return ""
+}
+
+func parseDate(low string, now time.Time) string {
+	if m := isoRe.FindString(low); m != "" {
+		if t, err := time.Parse("2006-01-02", m); err == nil && !t.Before(dateOnly(now)) {
+			return m
+		}
+	}
+	if strings.Contains(low, "today") {
+		return now.Format("2006-01-02")
+	}
+	if strings.Contains(low, "tomorrow") {
+		return now.AddDate(0, 0, 1).Format("2006-01-02")
+	}
+	if d := parseInDays(low, now); d != "" {
+		return d
+	}
+	if d := parseMonthDay(low, now); d != "" {
+		return d
+	}
+	if d := parseOrdinal(low, now); d != "" {
+		return d
+	}
+	return parseWeekday(low, now)
 }
 
 func parseWindow(low string) string {

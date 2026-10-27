@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chinmay/switchboard/internal/agent"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const defaultTimeout = 60 * time.Second
@@ -148,9 +149,9 @@ func NewFromEnv() (*Selector, bool) {
 		model = "qwen3:1.7b"
 	}
 	return &Selector{
-		STT: &WhisperSTT{BaseURL: inf, HTTP: &http.Client{Timeout: defaultTimeout}},
-		TTS: &PiperTTS{BaseURL: inf, HTTP: &http.Client{Timeout: defaultTimeout}},
-		LLM: &OllamaLLM{BaseURL: ollama, Model: model, HTTP: &http.Client{Timeout: defaultTimeout}},
+		STT: &WhisperSTT{BaseURL: inf, HTTP: &http.Client{Timeout: defaultTimeout, Transport: otelhttp.NewTransport(http.DefaultTransport)}},
+		TTS: &PiperTTS{BaseURL: inf, HTTP: &http.Client{Timeout: defaultTimeout, Transport: otelhttp.NewTransport(http.DefaultTransport)}},
+		LLM: &OllamaLLM{BaseURL: ollama, Model: model, HTTP: &http.Client{Timeout: defaultTimeout, Transport: otelhttp.NewTransport(http.DefaultTransport)}},
 	}, true
 }
 

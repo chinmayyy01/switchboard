@@ -8,6 +8,8 @@ import (
 	"github.com/chinmay/switchboard/internal/escalate"
 	"github.com/chinmay/switchboard/internal/guard"
 	"github.com/chinmay/switchboard/internal/metrics"
+	"github.com/chinmay/switchboard/internal/obs"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Sink interface {
@@ -54,6 +56,8 @@ func (s *Session) SetHumanOwned(v bool) { s.humanOwned.Store(v) }
 
 func (s *Session) SetLanguage(lang string) { s.lang = lang }
 
+func (s *Session) Interrupt() { s.seg.Reset() }
+
 func (s *Session) Summary() CallSummary {
 	sig := s.tracker.Signal()
 	return CallSummary{
@@ -75,18 +79,26 @@ func (s *Session) OnAudio(ctx context.Context, pcm []int16) error {
 }
 
 func (s *Session) respond(ctx context.Context, pcm []int16) error {
+	ctx, span := obs.Tracer().Start(ctx, "turn")
+	defer span.End()
+
 	t0 := time.Now()
 
-	tr, err := s.sel.Select(s.lang).STT.Transcribe(ctx, pcm, s.lang)
+	sttCtx, sttSpan := obs.Tracer().Start(ctx, "stt")
+	tr, err := s.sel.Select(s.lang).STT.Transcribe(sttCtx, pcm, s.lang)
 	if err != nil {
+		sttSpan.RecordError(err)
+		sttSpan.End()
 		return err
 	}
+	sttSpan.End()
 	metrics.ObserveStage("stt", time.Since(t0))
 
 	lang := s.lang
 	if lang == "" {
 		lang = tr.Lang
 	}
+	span.SetAttributes(attribute.String("lang", lang))
 	providers := s.sel.Select(lang)
 
 	if err := s.sink.EventJSON(map[string]any{"type": "stt.final", "text": tr.Text, "lang": lang}); err != nil {
@@ -118,10 +130,14 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	}
 
 	t1 := time.Now()
-	out, err := s.brain.Handle(ctx, Turn{UserText: tr.Text, History: s.history, Lang: lang})
+	brainCtx, brainSpan := obs.Tracer().Start(ctx, "brain")
+	out, err := s.brain.Handle(brainCtx, Turn{UserText: tr.Text, History: s.history, Lang: lang})
 	if err != nil {
+		brainSpan.RecordError(err)
+		brainSpan.End()
 		return err
 	}
+	brainSpan.End()
 	metrics.ObserveStage("brain", time.Since(t1))
 
 	if out.Escalate && !s.escalated {
@@ -163,10 +179,14 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 		return err
 	}
 	t2 := time.Now()
-	audio, err := providers.TTS.Synthesize(ctx, out.Reply, lang)
+	ttsCtx, ttsSpan := obs.Tracer().Start(ctx, "tts")
+	audio, err := providers.TTS.Synthesize(ttsCtx, out.Reply, lang)
 	if err != nil {
+		ttsSpan.RecordError(err)
+		ttsSpan.End()
 		return err
 	}
+	ttsSpan.End()
 	if err := s.sink.Audio(audio); err != nil {
 		return err
 	}
@@ -175,6 +195,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	}
 	metrics.ObserveStage("tts", time.Since(t2))
 	metrics.ObserveTurn(time.Since(t0))
+	span.SetAttributes(attribute.String("state", out.State), attribute.Bool("escalated", out.Escalate))
 
 	if err := s.sink.EventJSON(map[string]any{
 		"type":     "latency",

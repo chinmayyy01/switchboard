@@ -8,13 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/chinmay/switchboard/internal/agent"
 	"github.com/chinmay/switchboard/internal/ai"
@@ -24,6 +25,7 @@ import (
 	"github.com/chinmay/switchboard/internal/inference"
 	"github.com/chinmay/switchboard/internal/jobs"
 	"github.com/chinmay/switchboard/internal/metrics"
+	"github.com/chinmay/switchboard/internal/obs"
 	"github.com/chinmay/switchboard/internal/store"
 )
 
@@ -47,12 +49,12 @@ func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, js *jobs.Store, b
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, acceptOpts)
 		if err != nil {
-			log.Printf("ws accept: %v", err)
+			slog.Error("ws accept", "err", err)
 			return
 		}
 		defer c.CloseNow()
 		if err := run(base, c, h, st, reg, js); err != nil {
-			log.Printf("ws session ended: %v", err)
+			slog.Error("ws session ended", "err", err)
 		}
 	}
 }
@@ -65,7 +67,7 @@ func SupervisorHandler(h *hub.Hub, token string, base context.Context) http.Hand
 		}
 		c, err := websocket.Accept(w, r, acceptOpts)
 		if err != nil {
-			log.Printf("supervisor accept: %v", err)
+			slog.Error("supervisor accept", "err", err)
 			return
 		}
 		defer c.CloseNow()
@@ -104,7 +106,7 @@ func SupervisorCallHandler(reg *BridgeRegistry, h *hub.Hub, token string, base c
 		}
 		c, err := websocket.Accept(w, r, acceptOpts)
 		if err != nil {
-			log.Printf("bridge accept: %v", err)
+			slog.Error("bridge accept", "err", err)
 			return
 		}
 		defer c.CloseNow()
@@ -136,6 +138,12 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 	c.SetReadLimit(64 * 1024)
 
 	callID := newCallID()
+	ctx, span := obs.Tracer().Start(ctx, "call")
+	defer span.End()
+	span.SetAttributes(attribute.String("call.id", callID))
+	callLog := slog.With("call_id", callID)
+	callLog.Info("call.start")
+
 	startedAt := time.Now()
 	h.Register(callID)
 	metrics.CallStarted()
@@ -168,7 +176,7 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 		for m := range msgs {
 			if m.pcm != nil {
 				if err := sess.OnAudio(ctx, m.pcm); err != nil {
-					log.Printf("call %s: pipeline: %v", callID, err)
+					slog.Error("pipeline", "call_id", callID, "err", err)
 					return
 				}
 				continue
@@ -178,7 +186,11 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 				sess.SetLanguage(m.lang)
 				if m.lang != "" {
 					h.SetLang(callID, m.lang)
+					callLog.Info("call.lang", "lang", m.lang)
 				}
+			case "interrupt":
+				sess.Interrupt()
+				callLog.Info("interrupt")
 			}
 		}
 	}()
@@ -200,8 +212,15 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 			EndedAt:   time.Now(),
 		})
 		if n := dropped.Load(); n > 0 {
-			log.Printf("call %s: dropped %d frames (backpressure)", callID, n)
+			slog.Warn("backpressure", "call_id", callID, "dropped", n)
 		}
+		callLog.Info("call.end",
+			"lang", sum.Lang,
+			"turns", sum.Turns,
+			"escalated", sum.Escalated,
+			"reason", sum.Reason,
+			"dropped", dropped.Load(),
+		)
 	}()
 
 	for {
@@ -306,12 +325,17 @@ func (s wsSink) EventJSON(v any) error {
 			if t, ok := m["text"].(string); ok {
 				s.hub.AddTurn(s.callID, "agent", t)
 			}
+		case "tool.call":
+			slog.Info("tool.call", "call_id", s.callID, "name", m["name"])
 		case "escalation":
 			s.hub.SetEscalated(s.callID, true)
 			if reason, ok := m["reason"].(string); ok {
 				s.hub.SetReason(s.callID, reason)
+				slog.Info("escalation", "call_id", s.callID, "reason", reason)
 			}
 			s.hub.SetState(s.callID, "escalated")
+		case "guardrail":
+			slog.Warn("guardrail", "call_id", s.callID, "kind", m["kind"])
 		}
 	}
 	return s.w.write(websocket.MessageText, b)

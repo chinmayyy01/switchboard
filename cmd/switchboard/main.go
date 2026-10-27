@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +15,7 @@ import (
 	"github.com/chinmay/switchboard/internal/hub"
 	"github.com/chinmay/switchboard/internal/jobs"
 	"github.com/chinmay/switchboard/internal/metrics"
+	"github.com/chinmay/switchboard/internal/obs"
 	"github.com/chinmay/switchboard/internal/store"
 	"github.com/chinmay/switchboard/internal/ws"
 )
@@ -24,8 +25,17 @@ func main() {
 	dataDir := flag.String("data", "data", "call-record data directory")
 	flag.Parse()
 
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracer, err := obs.Init(ctx)
+	if err != nil {
+		slog.Error("otel init", "err", err)
+	} else {
+		defer shutdownTracer(context.Background())
+	}
 
 	token := os.Getenv("SUPERVISOR_TOKEN")
 
@@ -51,15 +61,16 @@ func main() {
 
 	go func() {
 		<-ctx.Done()
-		log.Printf("shutting down…")
+		slog.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("switchboard realtime service on http://localhost%s", *addr)
+	slog.Info("switchboard listening", "addr", *addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		slog.Error("listen", "err", err)
+		os.Exit(1)
 	}
 }
 

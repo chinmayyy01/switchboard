@@ -3,3 +3,7 @@ uvicorn[standard]
 faster-whisper
 piper-tts
 numpy
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-urllib

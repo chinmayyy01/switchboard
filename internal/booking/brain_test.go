@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chinmay/switchboard/internal/agent"
 	"github.com/chinmay/switchboard/internal/ai"
@@ -128,10 +129,50 @@ func TestFAQAbstainsAndEscalates(t *testing.T) {
 	}
 }
 
-func TestFAQWithoutKnowledgeEscalates(t *testing.T) {
+func TestFAQWithoutAnswererEscalates(t *testing.T) {
 	b := New(jobs.NewStore(), nil, "rivera")
 	out := run(t, b, "what is your warranty?")
 	if !out.Escalate || out.EndReason != "ungrounded" {
 		t.Fatalf("expected ungrounded escalation, got %+v", out)
+	}
+}
+
+func TestPhoneParsing(t *testing.T) {
+	cases := map[string]string{
+		"620 416 2579":                                    "6204162579",
+		"(620) 416-2579":                                  "6204162579",
+		"six two zero, four one six, two five seven nine": "6204162579",
+		"620 to 4162579":                                  "6204162579",
+	}
+	for in, want := range cases {
+		if got := digitsFromSpeech(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
+	}
+	if validPhone("620416257") != "" {
+		t.Error("9-digit number should be invalid")
+	}
+	if validPhone("16204162579") != "6204162579" {
+		t.Error("leading country code not stripped")
+	}
+	if speakPhone("6204162579") != "6 2 0 4 1 6 2 5 7 9" {
+		t.Errorf("unexpected spoken form: %q", speakPhone("6204162579"))
+	}
+}
+
+func TestDateParsing(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.Local)
+	cases := map[string]string{
+		"tomorrow":     "2026-10-29",
+		"next tuesday": "2026-11-03",
+		"november 5":   "2026-11-05",
+		"the 5th":      "2026-11-05",
+		"in 3 days":    "2026-10-31",
+		"2026-12-01":   "2026-12-01",
+	}
+	for in, want := range cases {
+		if got := parseDate(in, now); got != want {
+			t.Errorf("%q: got %s want %s", in, got, want)
+		}
 	}
 }

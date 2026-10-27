@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type Result struct {
@@ -43,7 +45,7 @@ func NewFromEnv() *Client {
 	if base == "" {
 		return nil
 	}
-	return &Client{BaseURL: base, HTTP: &http.Client{Timeout: 20 * time.Second}}
+	return &Client{BaseURL: base, HTTP: &http.Client{Timeout: 20 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)}}
 }
 
 func (c *Client) Retrieve(ctx context.Context, tenant, query string, k int, types []string) (RetrieveResponse, error) {
