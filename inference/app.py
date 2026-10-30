@@ -4,6 +4,7 @@ from functools import lru_cache
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.concurrency import run_in_threadpool
 
 from answer import answer as answer_query
@@ -12,6 +13,10 @@ from rag import EMBED_MODEL, KNOWLEDGE_DIR, embed_text, retrieve
 SAMPLE_RATE = 16000
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 PIPER_VOICE = os.getenv("PIPER_VOICE", "")
+ASR_PROMPT = os.getenv(
+    "ASR_PROMPT",
+    "The caller may speak phone numbers and addresses. Transcribe digits accurately.",
+)
 
 app = FastAPI(title="switchboard-inference")
 
@@ -72,7 +77,14 @@ def _resample(pcm, sr, target=SAMPLE_RATE):
 
 
 def _transcribe(audio, lang):
-    segments, info = whisper().transcribe(audio, language=lang, beam_size=1)
+    segments, info = whisper().transcribe(
+        audio,
+        language=lang,
+        beam_size=1,
+        initial_prompt=ASR_PROMPT,
+        condition_on_previous_text=False,
+        vad_filter=True,
+    )
     text = "".join(s.text for s in segments).strip()
     return text, info
 
@@ -93,6 +105,11 @@ def health():
         "embed_model": EMBED_MODEL,
         "knowledge_dir": KNOWLEDGE_DIR,
     }
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/stt")

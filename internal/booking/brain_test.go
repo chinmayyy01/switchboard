@@ -176,3 +176,28 @@ func TestDateParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestClosingAfterBooking(t *testing.T) {
+	st := jobs.NewStore()
+	b := New(st, nil, "rivera")
+	for _, s := range []string{"my kitchen sink is leaking", "12 Main Street", "tomorrow morning", "6204162579", "yes"} {
+		run(t, b, s)
+	}
+	out := run(t, b, "thank you")
+	if !out.EndCall || out.EndReason != "hangup" || out.Escalate {
+		t.Fatalf("expected polite hangup, got %+v", out)
+	}
+}
+
+func TestAddressRejectsFiller(t *testing.T) {
+	b := newBrain(jobs.NewStore())
+	run(t, b, "my ac is broken")
+	out := run(t, b, "my address is um")
+	if out.State != "address" {
+		t.Fatalf("expected to re-ask address, got %+v", out)
+	}
+	out = run(t, b, "37 Pragati Apartments")
+	if out.State != "time" {
+		t.Fatalf("expected time, got %+v", out)
+	}
+}

@@ -8,13 +8,20 @@ from pathlib import Path
 
 import numpy as np
 
+from cache import CACHE_HITS, CACHE_MISSES, RETRIEVE_SECONDS, EmbeddingCache, TTLCache
+
 KNOWLEDGE_DIR = os.getenv("KNOWLEDGE_DIR", "data/knowledge")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 VEC_MIN = float(os.getenv("RAG_MIN_VECTOR", "0.55"))
 SCORE_MIN = float(os.getenv("RAG_MIN_SCORE", "0.45"))
 
+RETRIEVAL_TTL = float(os.getenv("RETRIEVAL_TTL_SECONDS", "300"))
+
 _TOKEN = re.compile(r"[a-z0-9]+")
+
+_embed_cache = EmbeddingCache(maxsize=4096)
+_retrieval_cache = TTLCache(ttl=RETRIEVAL_TTL, maxsize=1024)
 
 
 def tokenize(text):
@@ -42,6 +49,13 @@ def chunk_doc(text, max_chars=600):
 
 
 def embed_text(text):
+    key = (EMBED_MODEL, text)
+    cached = _embed_cache.get(key)
+    if cached is not None:
+        CACHE_HITS.labels("embedding").inc()
+        return cached
+
+    CACHE_MISSES.labels("embedding").inc()
     body = json.dumps({"model": EMBED_MODEL, "input": text}).encode()
     req = urllib.request.Request(
         OLLAMA_URL + "/api/embed",
@@ -54,7 +68,10 @@ def embed_text(text):
     except Exception:
         return None
     embs = data.get("embeddings")
-    return embs[0] if embs else None
+    vec = embs[0] if embs else None
+    if vec is not None:
+        _embed_cache.set(key, vec)
+    return vec
 
 
 def _cosine(a, b):
@@ -117,7 +134,7 @@ class Index:
 
 
 @lru_cache(maxsize=64)
-def load_index(tenant):
+def load_index(tenant, version):
     path = Path(KNOWLEDGE_DIR) / f"{tenant}.json"
     if not path.exists():
         return None
@@ -125,8 +142,32 @@ def load_index(tenant):
     return Index(data.get("chunks", []))
 
 
+def doc_version(tenant):
+    path = Path(KNOWLEDGE_DIR) / f"{tenant}.json"
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return "missing"
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
 def retrieve(tenant, query, k=3, types=None):
-    idx = load_index(tenant)
+    version = doc_version(tenant)
+    key = (tenant, query.strip().lower(), k, tuple(types or ()), version)
+    cached = _retrieval_cache.get(key)
+    if cached is not None:
+        CACHE_HITS.labels("retrieval").inc()
+        return cached
+
+    CACHE_MISSES.labels("retrieval").inc()
+    with RETRIEVE_SECONDS.time():
+        result = _retrieve(tenant, query, k, types, version)
+    _retrieval_cache.set(key, result)
+    return result
+
+
+def _retrieve(tenant, query, k, types, version):
+    idx = load_index(tenant, version)
     if idx is None or not idx.chunks:
         return {"grounded": False, "top_score": 0.0, "results": []}
 

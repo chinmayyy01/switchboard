@@ -25,6 +25,7 @@ var (
 	rescheduleWords = []string{"reschedule", "change my appointment", "change the appointment", "move my appointment", "move the booking", "change my booking"}
 	yesWords        = []string{"yes", "yeah", "yep", "sure", "correct", "confirm", "go ahead", "that works", "please do", "ok", "okay"}
 	noWords         = []string{"no", "nope", "not", "don't", "do not", "different", "another"}
+	closingWords    = []string{"thank you", "thanks", "bye", "goodbye", "that's all", "that is all", "no thanks"}
 	faqWords        = []string{"hours", "open", "close", "closed", "price", "pricing", "cost", "charge", "fee", "how much", "serve", "service area", "warranty", "guarantee", "policy", "refund", "insurance", "cover", "district", "discount", "senior", "payment", "cash", "card"}
 )
 
@@ -77,6 +78,16 @@ func (b *Brain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, err
 		return b.escalate("Of course, connecting you to a person.", "caller_requested_human"), nil
 	case hasAny(low, faqWords):
 		return b.answerFAQ(ctx, text, turn.Lang)
+	}
+
+	switch b.state {
+	case "booked", "done", "cancelled", "rescheduled", "kept":
+		if isClosing(low) {
+			return b.out("You're all set. Goodbye!", "closed", nil, true, "hangup"), nil
+		}
+		return b.out("You're all set. Is there anything else?", b.state, nil, false, ""), nil
+	case "escalate":
+		return b.out("A person will be with you shortly.", "escalate", nil, true, "escalated"), nil
 	}
 
 	switch b.state {
@@ -133,9 +144,9 @@ func (b *Brain) serviceStep(low, text string) (agent.Outcome, error) {
 }
 
 func (b *Brain) addressStep(low, text string) (agent.Outcome, error) {
-	addr := clean(text)
-	if addr == "" || isQuestion(low) {
-		return b.out("What's the service address?", "address", nil, false, ""), nil
+	addr := cleanAddress(text)
+	if addr == "" || isQuestion(low) || !validAddress(addr) {
+		return b.out("Sorry, I didn't catch the address. Could you repeat it?", "address", nil, false, ""), nil
 	}
 	b.address = addr
 	return b.out("What day and window works? We have morning, afternoon, or evening.", "time", nil, false, ""), nil
@@ -626,6 +637,33 @@ func isQuestion(low string) bool {
 func clean(text string) string {
 	return strings.TrimSpace(strings.Trim(text, " .,!?;:"))
 }
+
+func cleanAddress(text string) string {
+	s := clean(text)
+	low := strings.ToLower(s)
+	for _, p := range []string{"my address is", "the address is", "address is", "i live at", "i'm at", "im at", "it's", "its"} {
+		if strings.HasPrefix(low, p) {
+			s = strings.TrimSpace(s[len(p):])
+			low = strings.ToLower(s)
+		}
+	}
+	return clean(s)
+}
+
+func validAddress(s string) bool {
+	low := strings.ToLower(strings.TrimSpace(s))
+	if len(low) < 4 {
+		return false
+	}
+	for _, filler := range []string{"um", "uh", "er", "hmm", "umm"} {
+		if low == filler {
+			return false
+		}
+	}
+	return true
+}
+
+func isClosing(low string) bool { return hasAny(low, closingWords) }
 
 func toolCall(name string, args map[string]any) *agent.ToolCall {
 	b, _ := json.Marshal(args)

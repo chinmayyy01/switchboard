@@ -58,6 +58,32 @@
           "legendFormat": "{{stage}}"
         }
       ]
+    },
+    {
+      "type": "timeseries",
+      "title": "AI cache hit rate",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (rate(switchboard_ai_cache_hits_total[5m])) / (sum by (kind) (rate(switchboard_ai_cache_hits_total[5m])) + sum by (kind) (rate(switchboard_ai_cache_misses_total[5m])))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "AI answer p95 (s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(switchboard_ai_answer_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
     }
   ]
 }
