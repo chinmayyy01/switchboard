@@ -1,0 +1,6 @@
+{
+  "id": "rivera",
+  "name": "Rivera Plumbing & HVAC",
+  "services": ["leak repair", "drain cleaning", "water heater", "ac service", "heating", "maintenance"],
+  "windows": ["morning", "afternoon", "evening"]
+}

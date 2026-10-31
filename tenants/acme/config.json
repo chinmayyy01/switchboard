@@ -1,0 +1,6 @@
+{
+  "id": "acme",
+  "name": "Acme Home Services",
+  "services": ["leak repair", "drain cleaning"],
+  "windows": ["morning", "afternoon"]
+}
