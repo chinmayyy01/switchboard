@@ -21,6 +21,7 @@ export default function Page() {
   } = useSwitchboard();
 
   const [lang, setLang] = useState("");
+  const [tenant, setTenant] = useState("rivera");
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-16 font-mono leading-relaxed">
@@ -35,6 +36,16 @@ export default function Page() {
 
       <div className="mt-8 flex items-center gap-3">
         <select
+          value={tenant}
+          onChange={(e) => setTenant(e.target.value)}
+          disabled={inCall}
+          className="rounded-md border border-neutral-300 px-2 py-2 text-sm disabled:opacity-50"
+        >
+          <option value="rivera">Rivera Plumbing</option>
+          <option value="acme">Acme Home</option>
+        </select>
+
+        <select
           value={lang}
           onChange={(e) => setLang(e.target.value)}
           disabled={inCall}
@@ -46,7 +57,7 @@ export default function Page() {
         </select>
 
         <button
-          onClick={() => (inCall ? endCall() : startCall(lang))}
+          onClick={() => (inCall ? endCall() : startCall(lang, tenant))}
           className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700"
         >
           {inCall ? "End call" : "Start call"}

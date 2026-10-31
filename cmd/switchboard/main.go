@@ -17,6 +17,7 @@ import (
 	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/obs"
 	"github.com/chinmay/switchboard/internal/store"
+	"github.com/chinmay/switchboard/internal/tenant"
 	"github.com/chinmay/switchboard/internal/ws"
 )
 
@@ -42,10 +43,16 @@ func main() {
 	h := hub.New()
 	st := store.New(*dataDir, 500)
 	reg := ws.NewBridgeRegistry()
-	js := jobs.NewStore()
+	jobsReg := jobs.NewRegistry()
+
+	tenants, err := tenant.Load("tenants")
+	if err != nil {
+		slog.Warn("tenant config", "err", err)
+		tenants = tenant.Default()
+	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", ws.Handler(h, st, reg, js, ctx))
+	mux.HandleFunc("/ws", ws.Handler(h, st, reg, jobsReg, tenants, ctx))
 	mux.HandleFunc("/ws/supervisor", ws.SupervisorHandler(h, token, ctx))
 	mux.HandleFunc("/ws/supervisor/call", ws.SupervisorCallHandler(reg, h, token, ctx))
 	mux.Handle("/metrics", metrics.Handler())

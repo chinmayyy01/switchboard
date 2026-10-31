@@ -87,7 +87,7 @@ func RunScenarios() ScenarioReport {
 				continue
 			}
 		}
-		b := New(st, nil, "rivera")
+		b := New(st, nil, "rivera", "Rivera Plumbing")
 
 		var out agent.Outcome
 		for _, t := range sc.Turns {

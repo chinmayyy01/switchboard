@@ -16,6 +16,7 @@ export type Turn = { role: string; text: string };
 
 export type Call = {
   id: string;
+  tenant: string;
   lang: string;
   state: string;
   last_text: string;

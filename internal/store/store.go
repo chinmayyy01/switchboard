@@ -13,6 +13,7 @@ import (
 
 type Record struct {
 	ID        string          `json:"id"`
+	Tenant    string          `json:"tenant"`
 	Lang      string          `json:"lang"`
 	Turns     int             `json:"turns"`
 	Escalated bool            `json:"escalated"`

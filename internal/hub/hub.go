@@ -12,6 +12,7 @@ type Turn struct {
 
 type Call struct {
 	ID         string    `json:"id"`
+	Tenant     string    `json:"tenant"`
 	Lang       string    `json:"lang"`
 	State      string    `json:"state"`
 	LastText   string    `json:"last_text"`
@@ -38,9 +39,9 @@ func New() *Hub {
 	}
 }
 
-func (h *Hub) Register(id string) {
+func (h *Hub) Register(id, tenant string) {
 	h.mu.Lock()
-	h.calls[id] = &Call{ID: id, StartedAt: time.Now()}
+	h.calls[id] = &Call{ID: id, Tenant: tenant, StartedAt: time.Now()}
 	h.publishLocked()
 	h.mu.Unlock()
 }

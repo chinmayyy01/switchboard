@@ -49,22 +49,30 @@ var (
 )
 
 type Brain struct {
-	store      *jobs.Store
-	kb         Answerer
-	tenant     string
-	state      string
-	service    string
-	address    string
-	date       string
-	window     string
-	phone      string
-	jobID      string
-	offered    []string
-	phoneTries int
+	store        *jobs.Store
+	kb           Answerer
+	tenant       string
+	businessName string
+	state        string
+	service      string
+	address      string
+	date         string
+	window       string
+	phone        string
+	jobID        string
+	offered      []string
+	phoneTries   int
 }
 
-func New(store *jobs.Store, kb Answerer, tenant string) *Brain {
-	return &Brain{store: store, kb: kb, tenant: tenant, state: "greet"}
+func New(store *jobs.Store, kb Answerer, tenant, businessName string) *Brain {
+	return &Brain{store: store, kb: kb, tenant: tenant, businessName: businessName, state: "greet"}
+}
+
+func (b *Brain) name() string {
+	if b.businessName != "" {
+		return b.businessName
+	}
+	return "the office"
 }
 
 func (b *Brain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, error) {
@@ -128,7 +136,7 @@ func (b *Brain) greet(low, text string) (agent.Outcome, error) {
 		b.service = svc
 		return b.out("Got it, "+svc+". What's the service address?", "address", nil, false, ""), nil
 	}
-	return b.out("Thanks for calling Rivera Plumbing. What do you need help with today?", "service", nil, false, ""), nil
+	return b.out("Thanks for calling "+b.name()+". What do you need help with today?", "service", nil, false, ""), nil
 }
 
 func (b *Brain) serviceStep(low, text string) (agent.Outcome, error) {

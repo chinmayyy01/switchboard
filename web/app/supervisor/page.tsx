@@ -14,6 +14,7 @@ const api = (p: string) =>
 
 type CallRecord = {
   id: string;
+  tenant: string;
   lang: string;
   turns: number;
   escalated: boolean;
@@ -95,6 +96,11 @@ export default function SupervisorPage() {
               <span className="rounded bg-neutral-200 px-2 py-0.5 text-xs">
                 {c.id}
               </span>
+              {c.tenant && (
+                <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
+                  {c.tenant}
+                </span>
+              )}
               {c.lang && (
                 <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
                   {c.lang}
@@ -183,6 +189,7 @@ export default function SupervisorPage() {
               <span className="rounded bg-neutral-200 px-2 py-0.5 text-xs">
                 {r.id}
               </span>
+              <span className="ml-2 text-xs text-neutral-400">{r.tenant}</span>
               <span className="ml-2 text-neutral-500">
                 {r.escalated ? `escalated (${r.reason})` : "contained"} ·{" "}
                 {r.turns} turns

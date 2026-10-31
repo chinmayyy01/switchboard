@@ -27,6 +27,7 @@ import (
 	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/obs"
 	"github.com/chinmay/switchboard/internal/store"
+	"github.com/chinmay/switchboard/internal/tenant"
 )
 
 const frameQueue = 128
@@ -45,15 +46,25 @@ func authorized(r *http.Request, token string) bool {
 	return r.Header.Get("X-Supervisor-Token") == token
 }
 
-func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, js *jobs.Store, base context.Context) http.HandlerFunc {
+func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, jobsReg *jobs.Registry, tenants *tenant.Registry, base context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID := r.URL.Query().Get("tenant")
+		if tenantID == "" {
+			tenantID = "rivera"
+		}
+		t, ok := tenants.Get(tenantID)
+		if !ok {
+			http.Error(w, "unknown tenant", http.StatusNotFound)
+			return
+		}
+
 		c, err := websocket.Accept(w, r, acceptOpts)
 		if err != nil {
 			slog.Error("ws accept", "err", err)
 			return
 		}
 		defer c.CloseNow()
-		if err := run(base, c, h, st, reg, js); err != nil {
+		if err := run(base, c, h, st, reg, jobsReg, t); err != nil {
 			slog.Error("ws session ended", "err", err)
 		}
 	}
@@ -134,18 +145,18 @@ type callMsg struct {
 	pcm     []int16
 }
 
-func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, reg *BridgeRegistry, js *jobs.Store) error {
+func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, reg *BridgeRegistry, jobsReg *jobs.Registry, t tenant.Tenant) error {
 	c.SetReadLimit(64 * 1024)
 
 	callID := newCallID()
 	ctx, span := obs.Tracer().Start(ctx, "call")
 	defer span.End()
-	span.SetAttributes(attribute.String("call.id", callID))
-	callLog := slog.With("call_id", callID)
+	span.SetAttributes(attribute.String("call.id", callID), attribute.String("tenant", t.ID))
+	callLog := slog.With("call_id", callID, "tenant", t.ID)
 	callLog.Info("call.start")
 
 	startedAt := time.Now()
-	h.Register(callID)
+	h.Register(callID, t.ID)
 	metrics.CallStarted()
 	defer h.Unregister(callID)
 
@@ -165,7 +176,8 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 	if c := ai.NewFromEnv(); c != nil {
 		kb = c
 	}
-	sess := agent.NewSession(sel, booking.New(js, kb, "rivera"), wsSink{w: w, hub: h, callID: callID})
+	jobStore := jobsReg.For(t.ID)
+	sess := agent.NewSession(sel, booking.New(jobStore, kb, t.ID, t.Name), wsSink{w: w, hub: h, callID: callID})
 	h.SetControl(callID, func() { sess.SetHumanOwned(true) })
 
 	msgs := make(chan callMsg, frameQueue)
@@ -203,6 +215,7 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 		sum := sess.Summary()
 		st.Save(store.Record{
 			ID:        callID,
+			Tenant:    t.ID,
 			Lang:      sum.Lang,
 			Turns:     sum.Turns,
 			Escalated: sum.Escalated,

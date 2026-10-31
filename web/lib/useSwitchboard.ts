@@ -48,6 +48,7 @@ export function useSwitchboard() {
   const speakingRef = useRef(false);
   const playSrcRef = useRef<AudioBufferSourceNode | null>(null);
   const graceUntilRef = useRef(0);
+  const tenantRef = useRef("rivera");
   const seqRef = useRef(0);
   const inflightRef = useRef<Map<number, number>>(new Map());
 
@@ -140,7 +141,9 @@ export function useSwitchboard() {
 
   const connect = useCallback((): Promise<WebSocket> => {
     return new Promise((resolve) => {
-      const ws = new WebSocket(WS_URL);
+      const url = new URL(WS_URL);
+      url.searchParams.set("tenant", tenantRef.current);
+      const ws = new WebSocket(url.toString());
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         setStatus("connected");
@@ -190,7 +193,8 @@ export function useSwitchboard() {
   }, [interrupt]);
 
   const startCall = useCallback(
-    async (lang: string) => {
+    async (lang: string, tenant: string) => {
+      tenantRef.current = tenant;
       await ensureAudio();
       await ctxRef.current?.resume();
       let ws = wsRef.current;

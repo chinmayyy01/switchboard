@@ -18,7 +18,7 @@ func (s stubKB) Answer(_ context.Context, _, _ string, _ int, _ string) (ai.Answ
 }
 
 func newBrain(st *jobs.Store) *Brain {
-	return New(st, nil, "rivera")
+	return New(st, nil, "rivera", "Rivera Plumbing")
 }
 
 func run(t *testing.T, b *Brain, text string) agent.Outcome {
@@ -105,7 +105,7 @@ func TestFAQGroundsAndCites(t *testing.T) {
 		Answer:    "We're open Monday to Friday, 8am to 6pm.",
 		Citations: []string{"hours (faq/hours)"},
 	}}
-	b := New(jobs.NewStore(), kb, "rivera")
+	b := New(jobs.NewStore(), kb, "rivera", "Rivera Plumbing")
 
 	out := run(t, b, "what are your hours?")
 	if out.State != "faq" || out.Escalate {
@@ -121,7 +121,7 @@ func TestFAQGroundsAndCites(t *testing.T) {
 
 func TestFAQAbstainsAndEscalates(t *testing.T) {
 	kb := stubKB{res: ai.AnswerResponse{Grounded: false}}
-	b := New(jobs.NewStore(), kb, "rivera")
+	b := New(jobs.NewStore(), kb, "rivera", "Rivera Plumbing")
 
 	out := run(t, b, "do you offer a senior discount?")
 	if !out.Escalate || out.EndReason != "ungrounded" {
@@ -130,7 +130,7 @@ func TestFAQAbstainsAndEscalates(t *testing.T) {
 }
 
 func TestFAQWithoutAnswererEscalates(t *testing.T) {
-	b := New(jobs.NewStore(), nil, "rivera")
+	b := New(jobs.NewStore(), nil, "rivera", "Rivera Plumbing")
 	out := run(t, b, "what is your warranty?")
 	if !out.Escalate || out.EndReason != "ungrounded" {
 		t.Fatalf("expected ungrounded escalation, got %+v", out)
@@ -179,7 +179,7 @@ func TestDateParsing(t *testing.T) {
 
 func TestClosingAfterBooking(t *testing.T) {
 	st := jobs.NewStore()
-	b := New(st, nil, "rivera")
+	b := New(st, nil, "rivera", "Rivera Plumbing")
 	for _, s := range []string{"my kitchen sink is leaking", "12 Main Street", "tomorrow morning", "6204162579", "yes"} {
 		run(t, b, s)
 	}

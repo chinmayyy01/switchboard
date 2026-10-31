@@ -11,7 +11,18 @@ import (
 
 func Calls(s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, s.List())
+		tenant := r.URL.Query().Get("tenant")
+		records := s.List()
+		if tenant != "" {
+			filtered := records[:0]
+			for _, rec := range records {
+				if rec.Tenant == tenant {
+					filtered = append(filtered, rec)
+				}
+			}
+			records = filtered
+		}
+		writeJSON(w, records)
 	}
 }
 
@@ -35,9 +46,13 @@ func Label(s *store.Store) http.HandlerFunc {
 
 func Report(s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		tenant := r.URL.Query().Get("tenant")
 		labels := s.Labels()
 		var preds []eval.Prediction
 		for _, rec := range s.List() {
+			if tenant != "" && rec.Tenant != tenant {
+				continue
+			}
 			label, ok := labels[rec.ID]
 			if !ok {
 				continue
