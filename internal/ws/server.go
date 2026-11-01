@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/chinmay/switchboard/internal/jobs"
 	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/obs"
+	"github.com/chinmay/switchboard/internal/openai"
 	"github.com/chinmay/switchboard/internal/store"
 	"github.com/chinmay/switchboard/internal/tenant"
 )
@@ -164,8 +166,9 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 	defer reg.remove(callID)
 
 	var sel agent.Selector = agent.NewFakeSelector()
-	if real, ok := inference.NewFromEnv(); ok {
-		sel = real
+	realSel, isReal := inference.NewFromEnv()
+	if isReal {
+		sel = realSel
 	}
 
 	w := &connWriter{ctx: ctx, c: c}
@@ -177,7 +180,21 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 		kb = c
 	}
 	jobStore := jobsReg.For(t.ID)
-	sess := agent.NewSession(sel, booking.New(jobStore, kb, t.ID, t.Name), wsSink{w: w, hub: h, callID: callID})
+
+	var brain agent.Brain
+	if o := openai.NewSarvamFromEnv(); o != nil {
+		brain = booking.NewLLM(jobStore, kb, o, t.ID, t.Name, t.Services)
+	} else if o := openai.NewFromEnv(); o != nil {
+		brain = booking.NewLLM(jobStore, kb, o, t.ID, t.Name, t.Services)
+	} else if isReal && os.Getenv("BRAIN") == "llm" {
+		brain = booking.NewLLM(jobStore, kb, sel.Select("").LLM, t.ID, t.Name, t.Services)
+	} else if isReal && os.Getenv("BRAIN") == "hybrid" {
+		brain = booking.NewHybrid(booking.New(jobStore, kb, t.ID, t.Name), sel.Select("").LLM)
+	} else {
+		brain = booking.New(jobStore, kb, t.ID, t.Name)
+	}
+
+	sess := agent.NewSession(sel, brain, wsSink{w: w, hub: h, callID: callID})
 	h.SetControl(callID, func() { sess.SetHumanOwned(true) })
 
 	msgs := make(chan callMsg, frameQueue)
@@ -213,16 +230,22 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 		metrics.CallEnded()
 		metrics.Dropped(int(dropped.Load()))
 		sum := sess.Summary()
+		turns := make([]store.Turn, 0, 8)
+		for _, t := range h.Transcript(callID) {
+			turns = append(turns, store.Turn{Role: t.Role, Text: t.Text})
+		}
 		st.Save(store.Record{
-			ID:        callID,
-			Tenant:    t.ID,
-			Lang:      sum.Lang,
-			Turns:     sum.Turns,
-			Escalated: sum.Escalated,
-			Reason:    sum.Reason,
-			Signal:    sum.Signal,
-			StartedAt: startedAt,
-			EndedAt:   time.Now(),
+			ID:         callID,
+			Tenant:     t.ID,
+			Lang:       sum.Lang,
+			Turns:      sum.Turns,
+			Escalated:  sum.Escalated,
+			Reason:     sum.Reason,
+			Signal:     sum.Signal,
+			Transcript: turns,
+			Summary:    store.Summarize(turns, sum.Escalated, sum.Reason),
+			StartedAt:  startedAt,
+			EndedAt:    time.Now(),
 		})
 		if n := dropped.Load(); n > 0 {
 			slog.Warn("backpressure", "call_id", callID, "dropped", n)
@@ -355,7 +378,22 @@ func (s wsSink) EventJSON(v any) error {
 }
 
 func (s wsSink) Audio(pcm []int16) error {
-	return s.w.writePCM(pcm)
+	const chunkSamples = 1600
+	for start := 0; start < len(pcm); start += chunkSamples {
+		end := start + chunkSamples
+		if end > len(pcm) {
+			end = len(pcm)
+		}
+		part := pcm[start:end]
+		b := make([]byte, len(part)*2)
+		for i, v := range part {
+			binary.LittleEndian.PutUint16(b[i*2:], uint16(v))
+		}
+		if err := s.w.write(websocket.MessageBinary, b); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func pcmFromBytes(b []byte) []int16 {

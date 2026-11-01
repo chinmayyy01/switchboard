@@ -5,10 +5,13 @@ INFERENCE_URL ?= http://localhost:8100
 PY := inference/.venv/bin/python
 UV := inference/.venv/bin/uvicorn
 
+-include .env
+export
+
 .PHONY: ai ollama go go-fake web ingest eval load check
 
 ai:
-	PIPER_VOICE=$(PIPER_VOICE) KNOWLEDGE_DIR=$(KNOWLEDGE_DIR) EMBED_MODEL=nomic-embed-text $(UV) app:app --app-dir inference --host 127.0.0.1 --port 8100
+	PIPER_VOICE=$(PIPER_VOICE) KNOWLEDGE_DIR=$(KNOWLEDGE_DIR) WHISPER_MODEL=$(WHISPER_MODEL) EMBED_MODEL=nomic-embed-text $(UV) app:app --app-dir inference --host 127.0.0.1 --port 8100
 
 ollama:
 	@pgrep -f "ollama serve" >/dev/null && echo "ollama already running on :11434" || ollama serve

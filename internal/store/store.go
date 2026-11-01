@@ -11,17 +11,24 @@ import (
 	"github.com/chinmay/switchboard/internal/escalate"
 )
 
+type Turn struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
 type Record struct {
-	ID        string          `json:"id"`
-	Tenant    string          `json:"tenant"`
-	Lang      string          `json:"lang"`
-	Turns     int             `json:"turns"`
-	Escalated bool            `json:"escalated"`
-	Reason    string          `json:"reason"`
-	Signal    escalate.Signal `json:"signal"`
-	StartedAt time.Time       `json:"started_at"`
-	EndedAt   time.Time       `json:"ended_at"`
-	Label     *bool           `json:"label,omitempty"`
+	ID         string          `json:"id"`
+	Tenant     string          `json:"tenant"`
+	Lang       string          `json:"lang"`
+	Turns      int             `json:"turns"`
+	Escalated  bool            `json:"escalated"`
+	Reason     string          `json:"reason"`
+	Signal     escalate.Signal `json:"signal"`
+	Transcript []Turn          `json:"transcript,omitempty"`
+	Summary    string          `json:"summary,omitempty"`
+	StartedAt  time.Time       `json:"started_at"`
+	EndedAt    time.Time       `json:"ended_at"`
+	Label      *bool           `json:"label,omitempty"`
 }
 
 type Store struct {

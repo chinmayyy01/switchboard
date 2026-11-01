@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8090/ws";
 const SAMPLE_RATE = 16000;
+const PLAYBACK_RATE = 22050;
 const BARGE_RMS = 800;
 const BARGE_GRACE_MS = 250;
 
@@ -31,6 +32,9 @@ export function useSwitchboard() {
   const [agentLang, setAgentLang] = useState("");
   const [tool, setTool] = useState("");
   const [citations, setCitations] = useState<string[]>([]);
+  const [level, setLevel] = useState(0);
+  const [sampleRate, setSampleRate] = useState(0);
+  const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const [latency, setLatency] = useState<{
     stt: number;
     brain: number;
@@ -40,57 +44,72 @@ export function useSwitchboard() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
+  const playCtxRef = useRef<AudioContext | null>(null);
   const nodeRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const streamingRef = useRef(false);
   const speakingRef = useRef(false);
-  const playSrcRef = useRef<AudioBufferSourceNode | null>(null);
+  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  const nextStartRef = useRef(0);
+  const doneRef = useRef(false);
   const graceUntilRef = useRef(0);
+  const lastLevelRef = useRef(0);
+  const deviceIdRef = useRef("");
   const tenantRef = useRef("rivera");
   const seqRef = useRef(0);
   const inflightRef = useRef<Map<number, number>>(new Map());
 
   const interrupt = useCallback(() => {
-    if (playSrcRef.current) {
+    for (const src of sourcesRef.current) {
       try {
-        playSrcRef.current.stop();
+        src.stop();
       } catch {
         /* already stopped */
       }
-      playSrcRef.current = null;
     }
+    sourcesRef.current.clear();
+    nextStartRef.current = 0;
+    doneRef.current = false;
     speakingRef.current = false;
     setStatus("listening…");
     wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
   }, []);
 
   const playPCM = useCallback((buf: ArrayBuffer) => {
-    const ctx = ctxRef.current;
+    const ctx = playCtxRef.current;
     if (!ctx) return;
     const i16 = new Int16Array(buf);
     if (i16.length === 0) return;
 
     const f32 = new Float32Array(i16.length);
     for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
-    const audio = ctx.createBuffer(1, f32.length, SAMPLE_RATE);
+    const audio = ctx.createBuffer(1, f32.length, PLAYBACK_RATE);
     audio.copyToChannel(f32, 0);
 
-    speakingRef.current = true;
-    graceUntilRef.current = performance.now() + BARGE_GRACE_MS;
-    setStatus("agent speaking…");
+    if (!speakingRef.current) {
+      speakingRef.current = true;
+      doneRef.current = false;
+      graceUntilRef.current = performance.now() + BARGE_GRACE_MS;
+      setStatus("agent speaking…");
+    }
 
+    const startAt = Math.max(ctx.currentTime, nextStartRef.current);
     const src = ctx.createBufferSource();
     src.buffer = audio;
     src.connect(ctx.destination);
+    sourcesRef.current.add(src);
     src.onended = () => {
-      if (playSrcRef.current === src) playSrcRef.current = null;
-      speakingRef.current = false;
-      setStatus("listening…");
+      sourcesRef.current.delete(src);
+      if (sourcesRef.current.size === 0 && doneRef.current) {
+        speakingRef.current = false;
+        doneRef.current = false;
+        setStatus("listening…");
+      }
     };
-    playSrcRef.current = src;
-    src.start();
+    src.start(startAt);
+    nextStartRef.current = startAt + audio.duration;
   }, []);
 
   const onMessage = useCallback(
@@ -134,6 +153,16 @@ export function useSwitchboard() {
             turn: msg.turn_ms ?? 0,
           });
           break;
+        case "agent.speaking":
+          doneRef.current = false;
+          break;
+        case "agent.done":
+          doneRef.current = true;
+          if (sourcesRef.current.size === 0) {
+            speakingRef.current = false;
+            setStatus("listening…");
+          }
+          break;
       }
     },
     [playPCM],
@@ -162,40 +191,99 @@ export function useSwitchboard() {
     });
   }, [onMessage]);
 
+  const refreshDevices = useCallback(async () => {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const inputs = all
+        .filter((d) => d.kind === "audioinput")
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Microphone ${i + 1}`,
+        }));
+      setDevices(inputs);
+    } catch {
+      /* enumerate not available */
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshDevices();
+    const md = navigator.mediaDevices;
+    if (md?.addEventListener) {
+      md.addEventListener("devicechange", refreshDevices);
+      return () => md.removeEventListener("devicechange", refreshDevices);
+    }
+  }, [refreshDevices]);
+
   const ensureAudio = useCallback(async () => {
     if (ctxRef.current) return;
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
+        ...(deviceIdRef.current
+          ? { deviceId: { exact: deviceIdRef.current } }
+          : {}),
         channelCount: 1,
         echoCancellation: true,
         noiseSuppression: false,
         autoGainControl: false,
       },
     });
+    await refreshDevices();
     const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    setSampleRate(ctx.sampleRate);
     await ctx.audioWorklet.addModule("/audio-worklet.js");
+    if (!playCtxRef.current) {
+      try {
+        playCtxRef.current = new AudioContext({ sampleRate: PLAYBACK_RATE });
+      } catch {
+        playCtxRef.current = new AudioContext();
+      }
+      await playCtxRef.current.resume();
+    }
     const source = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, "pcm-capture");
     node.port.onmessage = (e: MessageEvent<Int16Array>) => {
       const ws = wsRef.current;
       if (!streamingRef.current || !ws || ws.readyState !== WebSocket.OPEN) return;
 
-      const speaking = speakingRef.current && performance.now() > graceUntilRef.current;
-      if (speaking && rms(e.data) > BARGE_RMS) {
-        interrupt();
+      const frameLevel = rms(e.data);
+      const now = performance.now();
+      if (now - lastLevelRef.current > 100) {
+        lastLevelRef.current = now;
+        setLevel(frameLevel);
       }
+
+      const agentSpeaking = speakingRef.current && now > graceUntilRef.current;
+      if (agentSpeaking) {
+        if (frameLevel > BARGE_RMS) {
+          interrupt();
+          ws.send(e.data as unknown as ArrayBuffer);
+        }
+        return;
+      }
+
       ws.send(e.data as unknown as ArrayBuffer);
     };
     source.connect(node);
+    const sink = ctx.createGain();
+    sink.gain.value = 0;
+    node.connect(sink);
+    sink.connect(ctx.destination);
     streamRef.current = stream;
     ctxRef.current = ctx;
     nodeRef.current = node;
-  }, [interrupt]);
+  }, [interrupt, refreshDevices]);
 
   const startCall = useCallback(
-    async (lang: string, tenant: string) => {
+    async (lang: string, tenant: string, deviceId: string) => {
       tenantRef.current = tenant;
-      await ensureAudio();
+      deviceIdRef.current = deviceId;
+      try {
+        await ensureAudio();
+      } catch {
+        setStatus("mic error");
+        return;
+      }
       await ctxRef.current?.resume();
       let ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) ws = await connect();
@@ -210,14 +298,16 @@ export function useSwitchboard() {
   const endCall = useCallback(async () => {
     streamingRef.current = false;
     speakingRef.current = false;
-    if (playSrcRef.current) {
+    for (const src of sourcesRef.current) {
       try {
-        playSrcRef.current.stop();
+        src.stop();
       } catch {
         /* already stopped */
       }
-      playSrcRef.current = null;
     }
+    sourcesRef.current.clear();
+    nextStartRef.current = 0;
+    doneRef.current = false;
     setInCall(false);
     if (pingTimerRef.current) clearInterval(pingTimerRef.current);
     wsRef.current?.close();
@@ -225,8 +315,10 @@ export function useSwitchboard() {
     nodeRef.current?.disconnect();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     await ctxRef.current?.close();
+    await playCtxRef.current?.close();
     nodeRef.current = null;
     ctxRef.current = null;
+    playCtxRef.current = null;
     streamRef.current = null;
     setStatus("idle");
     setTranscript("");
@@ -236,6 +328,8 @@ export function useSwitchboard() {
     setTool("");
     setCitations([]);
     setLatency(null);
+    setLevel(0);
+    setSampleRate(0);
   }, []);
 
   useEffect(() => {
@@ -243,6 +337,7 @@ export function useSwitchboard() {
       if (pingTimerRef.current) clearInterval(pingTimerRef.current);
       wsRef.current?.close();
       ctxRef.current?.close();
+      playCtxRef.current?.close();
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
@@ -258,6 +353,10 @@ export function useSwitchboard() {
     tool,
     citations,
     latency,
+    level,
+    sampleRate,
+    devices,
+    refreshDevices,
     startCall,
     endCall,
   };

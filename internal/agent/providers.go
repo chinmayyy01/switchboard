@@ -10,6 +10,10 @@ type LLM interface {
 	Respond(ctx context.Context, convo []Message, tools []Tool) (Reply, error)
 }
 
+type Streamer interface {
+	Stream(ctx context.Context, convo []Message, tools []Tool, onText func(string) error) (Reply, error)
+}
+
 type TTS interface {
 	Synthesize(ctx context.Context, text, lang string) ([]int16, error)
 }

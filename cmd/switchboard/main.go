@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/chinmay/switchboard/internal/jobs"
 	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/obs"
+	"github.com/chinmay/switchboard/internal/openai"
 	"github.com/chinmay/switchboard/internal/store"
 	"github.com/chinmay/switchboard/internal/tenant"
 	"github.com/chinmay/switchboard/internal/ws"
@@ -60,8 +62,24 @@ func main() {
 	mux.HandleFunc("POST /api/calls/{id}/label", requireToken(token, api.Label(st)))
 	mux.HandleFunc("POST /api/calls/{id}/takeover", requireToken(token, api.TakeOver(h)))
 	mux.HandleFunc("GET /api/report", requireToken(token, api.Report(st)))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		brain := "rules"
+		if openai.NewSarvamFromEnv() != nil {
+			brain = "llm/sarvam"
+		} else if openai.NewFromEnv() != nil {
+			brain = "llm/openai"
+		} else if mode := os.Getenv("BRAIN"); mode == "llm" {
+			brain = "llm/ollama"
+		} else if mode == "hybrid" {
+			brain = "hybrid/ollama"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":        true,
+			"brain":     brain,
+			"inference": os.Getenv("INFERENCE_URL") != "",
+			"tenants":   tenants.IDs(),
+		})
 	})
 
 	srv := &http.Server{Addr: *addr, Handler: withCORS(mux)}

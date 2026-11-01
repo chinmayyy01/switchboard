@@ -76,6 +76,18 @@ func (h *Hub) AddTurn(id, role, text string) {
 	})
 }
 
+func (h *Hub) Transcript(id string) []Turn {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.calls[id]
+	if !ok {
+		return nil
+	}
+	out := make([]Turn, len(c.Transcript))
+	copy(out, c.Transcript)
+	return out
+}
+
 func (h *Hub) TakeOver(id string) bool {
 	h.mu.Lock()
 	fn, ok := h.controls[id]

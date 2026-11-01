@@ -88,11 +88,8 @@ type OllamaLLM struct {
 }
 
 func (o *OllamaLLM) Respond(ctx context.Context, convo []agent.Message, tools []agent.Tool) (agent.Reply, error) {
-	msgs := make([]chatMessage, len(convo))
-	for i, m := range convo {
-		msgs[i] = chatMessage{Role: m.Role, Content: m.Content}
-	}
-	payload := map[string]any{"model": o.Model, "stream": false, "messages": msgs}
+	msgs := toOllamaMessages(convo)
+	payload := map[string]any{"model": o.Model, "stream": false, "messages": msgs, "think": false}
 	if len(tools) > 0 {
 		payload["tools"] = toOllamaTools(tools)
 	}
@@ -119,10 +116,35 @@ func (o *OllamaLLM) Respond(ctx context.Context, convo []agent.Message, tools []
 	}
 	reply := agent.Reply{Text: out.Message.Content}
 	if len(out.Message.ToolCalls) > 0 {
-		tc := out.Message.ToolCalls[0].Function
-		reply.ToolCall = &agent.ToolCall{Name: tc.Name, Args: tc.Arguments}
+		tc := out.Message.ToolCalls[0]
+		id := tc.ID
+		if id == "" {
+			id = "call_" + tc.Function.Name
+		}
+		reply.ToolCall = &agent.ToolCall{ID: id, Name: tc.Function.Name, Args: tc.Function.Arguments}
 	}
 	return reply, nil
+}
+
+func toOllamaMessages(convo []agent.Message) []chatMessage {
+	out := make([]chatMessage, len(convo))
+	for i, m := range convo {
+		cm := chatMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
+			ToolName:   m.ToolName,
+		}
+		for _, tc := range m.ToolCalls {
+			var call ollamaCall
+			call.ID = tc.ID
+			call.Function.Name = tc.Name
+			call.Function.Arguments = tc.Args
+			cm.ToolCalls = append(cm.ToolCalls, call)
+		}
+		out[i] = cm
+	}
+	return out
 }
 
 type Selector struct {
@@ -156,8 +178,19 @@ func NewFromEnv() (*Selector, bool) {
 }
 
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string       `json:"role"`
+	Content    string       `json:"content"`
+	ToolCalls  []ollamaCall `json:"tool_calls,omitempty"`
+	ToolCallID string       `json:"tool_call_id,omitempty"`
+	ToolName   string       `json:"tool_name,omitempty"`
+}
+
+type ollamaCall struct {
+	ID       string `json:"id,omitempty"`
+	Function struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments,omitempty"`
+	} `json:"function"`
 }
 
 type ollamaTool struct {
@@ -191,6 +224,7 @@ type chatResponse struct {
 		Role      string `json:"role"`
 		Content   string `json:"content"`
 		ToolCalls []struct {
+			ID       string `json:"id"`
 			Function struct {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`

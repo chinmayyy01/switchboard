@@ -3,8 +3,11 @@ package agent
 import "encoding/json"
 
 type Message struct {
-	Role    string
-	Content string
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolName   string     `json:"tool_name,omitempty"`
 }
 
 type Tool struct {
@@ -14,8 +17,9 @@ type Tool struct {
 }
 
 type ToolCall struct {
-	Name string
-	Args json.RawMessage
+	ID   string          `json:"id,omitempty"`
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
 }
 
 type Reply struct {
@@ -30,9 +34,10 @@ type Transcript struct {
 }
 
 type Turn struct {
-	UserText string
-	History  []Message
-	Lang     string
+	UserText   string
+	History    []Message
+	Lang       string
+	OnSentence func(string) error
 }
 
 type Outcome struct {
@@ -43,4 +48,5 @@ type Outcome struct {
 	Escalate   bool
 	EndCall    bool
 	EndReason  string
+	Streamed   bool
 }
