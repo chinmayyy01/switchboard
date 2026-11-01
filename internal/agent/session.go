@@ -39,6 +39,7 @@ type Session struct {
 	lang             string
 	turns            int
 	emptyTurns       int
+	firstAudio       atomic.Int64
 	escalated        bool
 	escalationReason string
 	humanOwned       *atomic.Bool
@@ -86,6 +87,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	if s.humanOwned.Load() {
 		return nil
 	}
+	s.firstAudio.Store(0)
 
 	ctx, span := obs.Tracer().Start(ctx, "turn")
 	defer span.End()
@@ -164,6 +166,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 		if err := s.sink.EventJSON(map[string]any{"type": "agent.speaking"}); err != nil {
 			return
 		}
+		s.markAudio()
 		s.sink.Audio(audio)
 	}()
 
@@ -195,6 +198,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 		if len(audio) == 0 {
 			return nil
 		}
+		s.markAudio()
 		return s.sink.Audio(audio)
 	}
 
@@ -279,12 +283,19 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	metrics.ObserveTurn(time.Since(t0))
 	span.SetAttributes(attribute.String("state", out.State), attribute.Bool("escalated", out.Escalate))
 
+	firstAudioMs := int64(-1)
+	if t := s.firstAudio.Load(); t != 0 {
+		firstAudioMs = (t - t0.UnixNano()) / int64(time.Millisecond)
+		metrics.ObserveStage("first_audio", time.Duration(firstAudioMs)*time.Millisecond)
+	}
+
 	if err := s.sink.EventJSON(map[string]any{
-		"type":     "latency",
-		"stt_ms":   sttDone.Sub(t0).Milliseconds(),
-		"brain_ms": brainDone.Sub(t1).Milliseconds(),
-		"tts_ms":   ttsMs,
-		"turn_ms":  time.Since(t0).Milliseconds(),
+		"type":           "latency",
+		"stt_ms":         sttDone.Sub(t0).Milliseconds(),
+		"brain_ms":       brainDone.Sub(t1).Milliseconds(),
+		"tts_ms":         ttsMs,
+		"first_audio_ms": firstAudioMs,
+		"turn_ms":        time.Since(t0).Milliseconds(),
 	}); err != nil {
 		return err
 	}
@@ -327,6 +338,7 @@ func (s *Session) speak(ctx context.Context, text, lang string) error {
 		if len(audio) == 0 {
 			continue
 		}
+		s.markAudio()
 		if err := s.sink.Audio(audio); err != nil {
 			return err
 		}
@@ -386,6 +398,12 @@ func startsWithAck(s string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Session) markAudio() {
+	if s.firstAudio.Load() == 0 {
+		s.firstAudio.CompareAndSwap(0, time.Now().UnixNano())
+	}
 }
 
 func (s *Session) startFiller(ctx context.Context, lang string) <-chan []int16 {

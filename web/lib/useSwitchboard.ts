@@ -18,6 +18,7 @@ type ServerEvent = {
   stt_ms?: number;
   brain_ms?: number;
   tts_ms?: number;
+  first_audio_ms?: number;
   turn_ms?: number;
   docs?: string[];
 };
@@ -39,6 +40,7 @@ export function useSwitchboard() {
     stt: number;
     brain: number;
     tts: number;
+    firstAudio: number;
     turn: number;
   } | null>(null);
 
@@ -150,6 +152,7 @@ export function useSwitchboard() {
             stt: msg.stt_ms ?? 0,
             brain: msg.brain_ms ?? 0,
             tts: msg.tts_ms ?? 0,
+            firstAudio: msg.first_audio_ms ?? -1,
             turn: msg.turn_ms ?? 0,
           });
           break;

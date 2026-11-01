@@ -409,7 +409,7 @@ export default function Page() {
                     {inCall ? "End call" : "Start call"}
                   </button>
 
-                  <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                     <MiniStat
                       label="RTT"
                       value={rttMs === null ? "—" : `${rttMs.toFixed(0)} ms`}
@@ -417,6 +417,14 @@ export default function Page() {
                     <MiniStat
                       label="STT"
                       value={latency ? `${latency.stt} ms` : "—"}
+                    />
+                    <MiniStat
+                      label="1st audio"
+                      value={
+                        latency && latency.firstAudio >= 0
+                          ? `${latency.firstAudio} ms`
+                          : "—"
+                      }
                     />
                     <MiniStat
                       label="Turn"
