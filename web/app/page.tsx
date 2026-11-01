@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import { BookingCard } from "@/components/BookingCard";
 import { Badge, Card, Empty, SectionHeading, Stat } from "@/components/ui";
 import { useBridge } from "@/lib/useBridge";
 import { useSupervisor, type Call } from "@/lib/useSupervisor";
@@ -60,6 +61,7 @@ export default function Page() {
     agentLang,
     tool,
     citations,
+    booking,
     latency,
     level,
     sampleRate,
@@ -473,6 +475,8 @@ export default function Page() {
                 </Card>
 
                 <div className="space-y-6">
+                  <BookingCard booking={booking} />
+
                   <Card className="p-6">
                     <div className="flex items-center justify-between gap-3">
                       <h2 className="text-base font-semibold tracking-tight text-slate-900">

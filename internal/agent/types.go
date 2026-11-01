@@ -22,9 +22,15 @@ type ToolCall struct {
 	Args json.RawMessage `json:"args"`
 }
 
+type Usage struct {
+	PromptTokens     int
+	CompletionTokens int
+}
+
 type Reply struct {
 	Text     string
 	ToolCall *ToolCall
+	Usage    Usage
 }
 
 type Transcript struct {
@@ -41,12 +47,14 @@ type Turn struct {
 }
 
 type Outcome struct {
-	Reply      string
-	State      string
-	ToolCalled *ToolCall
-	Citations  []string
-	Escalate   bool
-	EndCall    bool
-	EndReason  string
-	Streamed   bool
+	Reply            string
+	State            string
+	ToolCalled       *ToolCall
+	Citations        []string
+	Escalate         bool
+	EndCall          bool
+	EndReason        string
+	Streamed         bool
+	PromptTokens     int
+	CompletionTokens int
 }

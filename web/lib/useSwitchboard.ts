@@ -14,6 +14,8 @@ type ServerEvent = {
   text?: string;
   state?: string;
   name?: string;
+  args?: Record<string, unknown>;
+  reason?: string;
   lang?: string;
   stt_ms?: number;
   brain_ms?: number;
@@ -21,6 +23,24 @@ type ServerEvent = {
   first_audio_ms?: number;
   turn_ms?: number;
   docs?: string[];
+};
+
+export type Booking = {
+  service: string;
+  address: string;
+  date: string;
+  window: string;
+  phone: string;
+  booked: boolean;
+};
+
+const emptyBooking: Booking = {
+  service: "",
+  address: "",
+  date: "",
+  window: "",
+  phone: "",
+  booked: false,
 };
 
 export function useSwitchboard() {
@@ -33,6 +53,7 @@ export function useSwitchboard() {
   const [agentLang, setAgentLang] = useState("");
   const [tool, setTool] = useState("");
   const [citations, setCitations] = useState<string[]>([]);
+  const [booking, setBooking] = useState<Booking>(emptyBooking);
   const [level, setLevel] = useState(0);
   const [sampleRate, setSampleRate] = useState(0);
   const [devices, setDevices] = useState<{ deviceId: string; label: string }[]>([]);
@@ -53,6 +74,7 @@ export function useSwitchboard() {
 
   const streamingRef = useRef(false);
   const speakingRef = useRef(false);
+  const interruptedRef = useRef(false);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartRef = useRef(0);
   const doneRef = useRef(false);
@@ -64,6 +86,7 @@ export function useSwitchboard() {
   const inflightRef = useRef<Map<number, number>>(new Map());
 
   const interrupt = useCallback(() => {
+    interruptedRef.current = true;
     for (const src of sourcesRef.current) {
       try {
         src.stop();
@@ -80,6 +103,7 @@ export function useSwitchboard() {
   }, []);
 
   const playPCM = useCallback((buf: ArrayBuffer) => {
+    if (interruptedRef.current) return;
     const ctx = playCtxRef.current;
     if (!ctx) return;
     const i16 = new Int16Array(buf);
@@ -132,6 +156,7 @@ export function useSwitchboard() {
 
       switch (msg.type) {
         case "stt.final":
+          interruptedRef.current = false;
           setTranscript(msg.text ?? "");
           setAgentLang(msg.lang ?? "");
           break;
@@ -143,6 +168,34 @@ export function useSwitchboard() {
           break;
         case "tool.call":
           setTool(msg.name ?? "");
+          {
+            const a = msg.args ?? {};
+            setBooking((b) => {
+              switch (msg.name) {
+                case "set_service":
+                  return { ...b, service: String(a.service ?? b.service) };
+                case "save_address":
+                  return { ...b, address: String(a.address ?? b.address) };
+                case "set_time":
+                  return {
+                    ...b,
+                    date: String(a.date ?? b.date),
+                    window: String(a.window ?? b.window),
+                  };
+                case "set_phone":
+                  return { ...b, phone: String(a.phone ?? b.phone) };
+                case "book":
+                  return { ...b, booked: true };
+                default:
+                  return b;
+              }
+            });
+          }
+          break;
+        case "call.end":
+          if (msg.reason === "booked") {
+            setBooking((b) => ({ ...b, booked: true }));
+          }
           break;
         case "citation":
           setCitations(msg.docs ?? []);
@@ -157,9 +210,13 @@ export function useSwitchboard() {
           });
           break;
         case "agent.speaking":
+          speakingRef.current = true;
+          graceUntilRef.current = performance.now() + BARGE_GRACE_MS;
           doneRef.current = false;
+          setStatus("agent speaking…");
           break;
         case "agent.done":
+          interruptedRef.current = false;
           doneRef.current = true;
           if (sourcesRef.current.size === 0) {
             speakingRef.current = false;
@@ -281,6 +338,8 @@ export function useSwitchboard() {
     async (lang: string, tenant: string, deviceId: string) => {
       tenantRef.current = tenant;
       deviceIdRef.current = deviceId;
+      interruptedRef.current = false;
+      setBooking(emptyBooking);
       try {
         await ensureAudio();
       } catch {
@@ -311,6 +370,7 @@ export function useSwitchboard() {
     sourcesRef.current.clear();
     nextStartRef.current = 0;
     doneRef.current = false;
+    interruptedRef.current = false;
     setInCall(false);
     if (pingTimerRef.current) clearInterval(pingTimerRef.current);
     wsRef.current?.close();
@@ -355,6 +415,7 @@ export function useSwitchboard() {
     agentLang,
     tool,
     citations,
+    booking,
     latency,
     level,
     sampleRate,

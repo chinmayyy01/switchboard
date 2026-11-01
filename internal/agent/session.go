@@ -40,6 +40,7 @@ type Session struct {
 	turns            int
 	emptyTurns       int
 	firstAudio       atomic.Int64
+	cancelSpeech     atomic.Bool
 	escalated        bool
 	escalationReason string
 	humanOwned       *atomic.Bool
@@ -62,6 +63,12 @@ func (s *Session) SetHumanOwned(v bool) { s.humanOwned.Store(v) }
 func (s *Session) SetLanguage(lang string) { s.lang = lang }
 
 func (s *Session) Interrupt() { s.seg.Reset() }
+
+func (s *Session) CancelSpeech() { s.cancelSpeech.Store(true) }
+
+func (s *Session) Greet(ctx context.Context, text, lang string) error {
+	return s.speak(ctx, text, lang)
+}
 
 func (s *Session) Summary() CallSummary {
 	sig := s.tracker.Signal()
@@ -88,6 +95,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 		return nil
 	}
 	s.firstAudio.Store(0)
+	s.cancelSpeech.Store(false)
 
 	ctx, span := obs.Tracer().Start(ctx, "turn")
 	defer span.End()
@@ -160,7 +168,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	go func() {
 		defer close(fillerReady)
 		audio, ok := <-filler
-		if !ok || len(audio) == 0 {
+		if !ok || len(audio) == 0 || s.cancelSpeech.Load() {
 			return
 		}
 		if err := s.sink.EventJSON(map[string]any{"type": "agent.speaking"}); err != nil {
@@ -173,6 +181,9 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	spoke := false
 	var ttsStream time.Duration
 	onSentence := func(sentence string) error {
+		if s.cancelSpeech.Load() {
+			return nil
+		}
 		if !spoke {
 			select {
 			case <-fillerReady:
@@ -196,6 +207,9 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 		}
 		ttsSpan.End()
 		if len(audio) == 0 {
+			return nil
+		}
+		if s.cancelSpeech.Load() {
 			return nil
 		}
 		s.markAudio()
@@ -281,6 +295,10 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	}
 
 	metrics.ObserveTurn(time.Since(t0))
+	metrics.ObserveTokens(out.PromptTokens, out.CompletionTokens)
+	if out.EndCall && out.EndReason == "booked" {
+		metrics.Booking()
+	}
 	span.SetAttributes(attribute.String("state", out.State), attribute.Bool("escalated", out.Escalate))
 
 	firstAudioMs := int64(-1)
@@ -290,12 +308,14 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	}
 
 	if err := s.sink.EventJSON(map[string]any{
-		"type":           "latency",
-		"stt_ms":         sttDone.Sub(t0).Milliseconds(),
-		"brain_ms":       brainDone.Sub(t1).Milliseconds(),
-		"tts_ms":         ttsMs,
-		"first_audio_ms": firstAudioMs,
-		"turn_ms":        time.Since(t0).Milliseconds(),
+		"type":              "latency",
+		"stt_ms":            sttDone.Sub(t0).Milliseconds(),
+		"brain_ms":          brainDone.Sub(t1).Milliseconds(),
+		"tts_ms":            ttsMs,
+		"first_audio_ms":    firstAudioMs,
+		"prompt_tokens":     out.PromptTokens,
+		"completion_tokens": out.CompletionTokens,
+		"turn_ms":           time.Since(t0).Milliseconds(),
 	}); err != nil {
 		return err
 	}
@@ -326,6 +346,9 @@ func (s *Session) speak(ctx context.Context, text, lang string) error {
 	}
 
 	for _, part := range splitSentences(text) {
+		if s.cancelSpeech.Load() {
+			break
+		}
 		ttsCtx, ttsSpan := obs.Tracer().Start(ctx, "tts")
 		audio, err := s.sel.Select(lang).TTS.Synthesize(ttsCtx, part, lang)
 		if err != nil {
@@ -337,6 +360,9 @@ func (s *Session) speak(ctx context.Context, text, lang string) error {
 		ttsSpan.End()
 		if len(audio) == 0 {
 			continue
+		}
+		if s.cancelSpeech.Load() {
+			break
 		}
 		s.markAudio()
 		if err := s.sink.Audio(audio); err != nil {

@@ -15,7 +15,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from starlette.concurrency import run_in_threadpool
 
 from answer import answer as answer_query
@@ -40,6 +40,12 @@ ASR_PROMPT = os.getenv(
 
 logger = logging.getLogger("switchboard-ai")
 PIPER_LOCK = threading.Lock()
+TTS_CHARS = Counter(
+    "switchboard_tts_characters_total", "Characters synthesized.", ["provider"]
+)
+STT_SECONDS = Counter(
+    "switchboard_stt_seconds_total", "Audio seconds transcribed.", ["provider"]
+)
 
 
 @asynccontextmanager
@@ -297,16 +303,21 @@ async def stt(request: Request):
 
     if STT_PROVIDER == "sarvam" and SARVAM_API_KEY:
         try:
-            return await run_in_threadpool(_sarvam_stt, body, lang)
+            result = await run_in_threadpool(_sarvam_stt, body, lang)
+            STT_SECONDS.labels("sarvam").inc(len(body) / 2 / SAMPLE_RATE)
+            return result
         except Exception as e:
             logger.warning("sarvam stt failed, falling back to local: %s", e)
 
     if STT_PROVIDER == "deepgram" and DEEPGRAM_API_KEY:
         try:
-            return await run_in_threadpool(_deepgram_stt, body, lang)
+            result = await run_in_threadpool(_deepgram_stt, body, lang)
+            STT_SECONDS.labels("deepgram").inc(len(body) / 2 / SAMPLE_RATE)
+            return result
         except Exception as e:
             logger.warning("deepgram failed, falling back to local: %s", e)
 
+    STT_SECONDS.labels("local").inc(len(body) / 2 / SAMPLE_RATE)
     audio = np.frombuffer(body, dtype=np.int16).astype(np.float32) / 32768.0
     text, info = await run_in_threadpool(_transcribe, audio, lang)
     return {
@@ -328,6 +339,7 @@ async def tts(request: Request):
             pcm, sr = await run_in_threadpool(
                 _sarvam_tts, text, data.get("lang") or "en"
             )
+            TTS_CHARS.labels("sarvam").inc(len(text))
             pcm = _resample(pcm, sr, TTS_RATE)
             return Response(
                 content=pcm.tobytes(), media_type="application/octet-stream"
@@ -335,6 +347,7 @@ async def tts(request: Request):
         except Exception as e:
             logger.warning("sarvam tts failed, falling back to piper: %s", e)
 
+    TTS_CHARS.labels("piper").inc(len(text))
     raw, sr = await run_in_threadpool(_synthesize, text)
     pcm = np.frombuffer(raw, dtype=np.int16)
     pcm = _resample(pcm, sr, TTS_RATE)

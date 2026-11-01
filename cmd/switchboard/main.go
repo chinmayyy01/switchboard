@@ -62,6 +62,7 @@ func main() {
 	mux.HandleFunc("POST /api/calls/{id}/label", requireToken(token, api.Label(st)))
 	mux.HandleFunc("POST /api/calls/{id}/takeover", requireToken(token, api.TakeOver(h)))
 	mux.HandleFunc("GET /api/report", requireToken(token, api.Report(st)))
+	mux.HandleFunc("GET /api/geocode", api.Geocode())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		brain := "rules"
 		if openai.NewSarvamFromEnv() != nil {

@@ -50,6 +50,11 @@ func NewLLM(store *jobs.Store, kb Answerer, llm agent.LLM, tenant, businessName 
 func (b *LLMBrain) buildTools() []agent.Tool {
 	return []agent.Tool{
 		{
+			Name:        "list_services",
+			Description: "List the services this business offers, for when the caller asks what you can do.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+		{
 			Name:        "set_service",
 			Description: "Save the service the caller needs.",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"service":{"type":"string"}},"required":["service"]}`),
@@ -161,6 +166,7 @@ func (b *LLMBrain) activeTools(userText string) []agent.Tool {
 	names := map[string]bool{
 		"lookup_policy":     true,
 		"transfer_to_human": true,
+		"list_services":     true,
 	}
 	low := strings.ToLower(userText)
 	if hasAny(low, []string{"reschedule", "cancel", "move my", "existing", "my booking", "appointment"}) {
@@ -218,6 +224,10 @@ func (b *LLMBrain) systemPrompt(lang string) string {
 		b.date, b.window, !b.timePending && b.date != "",
 		b.phone, !b.phonePending && b.phone != "",
 	)
+	services := "none listed"
+	if len(b.services) > 0 {
+		services = strings.Join(b.services, ", ")
+	}
 
 	var next string
 	switch {
@@ -245,13 +255,15 @@ func (b *LLMBrain) systemPrompt(lang string) string {
 
 	return fmt.Sprintf(`You are Alex, a warm receptionist for %s. You are on a live call. Speak briefly and naturally in %s.
 Booking so far: %s.
+Services you can book: %s.
 %s
+What you can do: book a visit, reschedule or cancel one, answer policy/FAQ questions, and transfer to a human. If the caller asks what you can do or which services you offer, list these briefly and ask what they need. Never invent a service.
 Sound like a person on the phone: short sentences, contractions, and occasional natural acknowledgments ("Okay.", "Got it.", "Sure.", "Mm-hmm."). Do not overuse fillers or sound like a form. Use the full conversation above; never ask for a detail the caller already gave.
 Say dates naturally ("November 2nd" or "Monday"), never ISO dates. Never read internal job IDs or system references to the caller.
 Never claim you saved, recorded, or booked something unless a tool returned ok.
 For gas, flooding, no heat, electrical hazards, or sewage, call transfer_to_human. For hours, pricing, warranty, or service area, call lookup_policy and answer only from its result.
 Current date: %s. Never reveal reasoning, plans, tool names, or JSON.`,
-		b.businessName, language, state, next, today)
+		b.businessName, language, state, services, next, today)
 }
 
 func (b *LLMBrain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, error) {
@@ -273,6 +285,7 @@ func (b *LLMBrain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, 
 	var citations []string
 	var pendingEnd string
 	var lastTool *agent.ToolCall
+	var usage agent.Usage
 	nudged := false
 
 	streamer, canStream := b.llm.(agent.Streamer)
@@ -301,6 +314,8 @@ func (b *LLMBrain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, 
 			slog.Error("llm", "err", err, "stream", useStream)
 			return b.escalate("I'm having trouble hearing you. Let me connect you to a person.", "llm_error"), nil
 		}
+		usage.PromptTokens += reply.Usage.PromptTokens
+		usage.CompletionTokens += reply.Usage.CompletionTokens
 
 		if reply.ToolCall == nil {
 			if useStream {
@@ -333,11 +348,13 @@ func (b *LLMBrain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, 
 			}
 			b.history = append(b.history, agent.Message{Role: "assistant", Content: text})
 			out := agent.Outcome{
-				Reply:      text,
-				State:      "conversation",
-				ToolCalled: lastTool,
-				Citations:  citations,
-				Streamed:   streamed,
+				Reply:            text,
+				State:            "conversation",
+				ToolCalled:       lastTool,
+				Citations:        citations,
+				Streamed:         streamed,
+				PromptTokens:     usage.PromptTokens,
+				CompletionTokens: usage.CompletionTokens,
 			}
 			if pendingEnd != "" {
 				out.EndCall = true
@@ -374,6 +391,9 @@ func (b *LLMBrain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, 
 
 func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang string) (string, []string, string, *agent.Outcome) {
 	switch call.Name {
+	case "list_services":
+		return jsonResult(map[string]any{"services": b.services}), nil, "", nil
+
 	case "set_service":
 		var a struct {
 			Service string `json:"service"`

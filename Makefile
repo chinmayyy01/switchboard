@@ -8,7 +8,7 @@ UV := inference/.venv/bin/uvicorn
 -include .env
 export
 
-.PHONY: ai ollama go go-fake web ingest eval load check
+.PHONY: ai ollama go go-fake web ingest eval load check smoke
 
 ai:
 	PIPER_VOICE=$(PIPER_VOICE) KNOWLEDGE_DIR=$(KNOWLEDGE_DIR) WHISPER_MODEL=$(WHISPER_MODEL) EMBED_MODEL=nomic-embed-text $(UV) app:app --app-dir inference --host 127.0.0.1 --port 8100
@@ -34,6 +34,9 @@ eval:
 
 load:
 	go run ./cmd/loadgen -n 50
+
+smoke:
+	$(PY) scripts/smoke_sarvam.py
 
 check:
 	go build ./...

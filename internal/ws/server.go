@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,7 +34,7 @@ import (
 	"github.com/chinmay/switchboard/internal/tenant"
 )
 
-const frameQueue = 128
+const frameQueue = 256
 
 var acceptOpts = &websocket.AcceptOptions{
 	OriginPatterns: []string{"localhost:*", "127.0.0.1:*"},
@@ -217,6 +219,23 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 					h.SetLang(callID, m.lang)
 					callLog.Info("call.lang", "lang", m.lang)
 				}
+				lang := m.lang
+				if lang == "" {
+					lang = "en"
+				}
+				greeting := fmt.Sprintf(
+					"Hi, this is Alex at %s. I can book a visit, reschedule or cancel one, answer questions, or connect you to a person. What can I help you with?",
+					t.Name,
+				)
+				if strings.HasPrefix(lang, "hi") {
+					greeting = fmt.Sprintf(
+						"नमस्ते, मैं %s से Alex हूँ। मैं विज़िट बुक कर सकता हूँ, रीशेड्यूल या कैंसिल कर सकता हूँ, सवालों के जवाब दे सकता हूँ, या किसी व्यक्ति से जोड़ सकता हूँ। मैं कैसे मदद कर सकता हूँ?",
+						t.Name,
+					)
+				}
+				if err := sess.Greet(ctx, greeting, lang); err != nil {
+					slog.Error("greeting", "call_id", callID, "err", err)
+				}
 			case "interrupt":
 				sess.Interrupt()
 				callLog.Info("interrupt")
@@ -287,6 +306,9 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 				}
 				continue
 			}
+			if msg.Type == "interrupt" {
+				sess.CancelSpeech()
+			}
 			push(msgs, callMsg{control: msg.Type, lang: msg.Lang}, &dropped)
 		case websocket.MessageBinary:
 			pcm := pcmFromBytes(data)
@@ -299,6 +321,18 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 }
 
 func push(msgs chan callMsg, m callMsg, dropped *atomic.Int64) {
+	select {
+	case msgs <- m:
+		return
+	default:
+	}
+	if m.control != "" {
+		select {
+		case <-msgs:
+			dropped.Add(1)
+		default:
+		}
+	}
 	select {
 	case msgs <- m:
 	default:

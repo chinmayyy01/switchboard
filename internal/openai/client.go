@@ -169,6 +169,10 @@ func (c *Client) Respond(ctx context.Context, convo []agent.Message, tools []age
 				ToolCalls []apiToolCall `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return agent.Reply{}, err
@@ -178,7 +182,13 @@ func (c *Client) Respond(ctx context.Context, convo []agent.Message, tools []age
 	}
 
 	msg := out.Choices[0].Message
-	reply := agent.Reply{Text: msg.Content}
+	reply := agent.Reply{
+		Text: msg.Content,
+		Usage: agent.Usage{
+			PromptTokens:     out.Usage.PromptTokens,
+			CompletionTokens: out.Usage.CompletionTokens,
+		},
+	}
 	if len(msg.ToolCalls) > 0 {
 		tc := msg.ToolCalls[0]
 		reply.ToolCall = &agent.ToolCall{
@@ -228,6 +238,7 @@ func (c *Client) Stream(ctx context.Context, convo []agent.Message, tools []agen
 	calls := map[int]*acc{}
 	var order []int
 	var text strings.Builder
+	var usage agent.Usage
 
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -255,9 +266,19 @@ func (c *Client) Stream(ctx context.Context, convo []agent.Message, tools []agen
 					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
+		}
+		if chunk.Usage != nil {
+			usage = agent.Usage{
+				PromptTokens:     chunk.Usage.PromptTokens,
+				CompletionTokens: chunk.Usage.CompletionTokens,
+			}
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {
@@ -287,7 +308,7 @@ func (c *Client) Stream(ctx context.Context, convo []agent.Message, tools []agen
 		return agent.Reply{}, err
 	}
 
-	reply := agent.Reply{Text: text.String()}
+	reply := agent.Reply{Text: text.String(), Usage: usage}
 	if len(order) > 0 {
 		a := calls[order[0]]
 		id := a.id

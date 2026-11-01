@@ -21,6 +21,15 @@ var (
 	escalationsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "switchboard_escalations_total", Help: "Escalations triggered.",
 	})
+	bookingsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "switchboard_bookings_total", Help: "Calls that completed a booking.",
+	})
+	llmPromptTokens = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "switchboard_llm_prompt_tokens_total", Help: "LLM prompt tokens.",
+	})
+	llmCompletionTokens = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "switchboard_llm_completion_tokens_total", Help: "LLM completion tokens.",
+	})
 	droppedFrames = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "switchboard_dropped_frames_total", Help: "Audio frames dropped under backpressure.",
 	})
@@ -35,6 +44,15 @@ var (
 func CallStarted() { callsTotal.Inc(); activeCalls.Inc() }
 func CallEnded()   { activeCalls.Dec() }
 func Escalation()  { escalationsTotal.Inc() }
+func Booking()     { bookingsTotal.Inc() }
+func ObserveTokens(prompt, completion int) {
+	if prompt > 0 {
+		llmPromptTokens.Add(float64(prompt))
+	}
+	if completion > 0 {
+		llmCompletionTokens.Add(float64(completion))
+	}
+}
 func Dropped(n int) {
 	if n > 0 {
 		droppedFrames.Add(float64(n))
