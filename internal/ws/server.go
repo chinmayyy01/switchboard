@@ -146,6 +146,7 @@ func SupervisorCallHandler(reg *BridgeRegistry, h *hub.Hub, token string, base c
 type callMsg struct {
 	control string
 	lang    string
+	text    string
 	pcm     []int16
 }
 
@@ -239,6 +240,11 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 			case "interrupt":
 				sess.Interrupt()
 				callLog.Info("interrupt")
+			case "user.text":
+				if err := sess.HandleText(ctx, m.text, m.lang); err != nil {
+					slog.Error("pipeline", "call_id", callID, "err", err)
+					return
+				}
 			}
 		}
 	}()
@@ -296,6 +302,7 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 			var msg struct {
 				Type string `json:"type"`
 				Lang string `json:"lang"`
+				Text string `json:"text"`
 			}
 			if err := json.Unmarshal(data, &msg); err != nil {
 				continue
@@ -309,7 +316,7 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 			if msg.Type == "interrupt" {
 				sess.CancelSpeech()
 			}
-			push(msgs, callMsg{control: msg.Type, lang: msg.Lang}, &dropped)
+			push(msgs, callMsg{control: msg.Type, lang: msg.Lang, text: msg.Text}, &dropped)
 		case websocket.MessageBinary:
 			pcm := pcmFromBytes(data)
 			if br.hasSupervisor() {

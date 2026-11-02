@@ -33,6 +33,8 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v4")
 SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
 SARVAM_TTS_SPEAKER = os.getenv("SARVAM_TTS_SPEAKER", "shubh")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+VISION_MODEL = os.getenv("VISION_MODEL", "qwen2.5vl:3b")
 ASR_PROMPT = os.getenv(
     "ASR_PROMPT",
     "The caller may speak phone numbers and addresses. Transcribe digits accurately.",
@@ -231,6 +233,54 @@ def _sarvam_stt(pcm_bytes, lang):
     }
 
 
+def _vision(data):
+    b64 = base64.b64encode(data).decode()
+    payload = {
+        "model": VISION_MODEL,
+        "stream": False,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "You are a home-services triage assistant. Describe the problem in this "
+                    "photo in 1-2 short spoken sentences. Mention urgency if visible (active "
+                    "leak, flooding, smoke, sparking) and any visible model or serial number. "
+                    "Do not invent details. If it is not a home-services problem, say what it shows."
+                ),
+                "images": [b64],
+            }
+        ],
+    }
+    req = urllib.request.Request(
+        OLLAMA_URL.rstrip("/") + "/api/chat",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        out = json.loads(resp.read())
+    return ((out.get("message") or {}).get("content") or "").strip()
+
+
+@app.post("/vision")
+async def vision(request: Request):
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "image required")
+    if len(body) > 8 * 1024 * 1024:
+        raise HTTPException(413, "image too large")
+    try:
+        description = await run_in_threadpool(_vision, body)
+        return {
+            "available": True,
+            "description": description,
+            "model": VISION_MODEL,
+        }
+    except Exception as e:
+        logger.warning("vision failed: %s", e)
+        raise HTTPException(503, "vision unavailable")
+
+
 def _deepgram_stt(pcm_bytes, lang):
     params = {
         "model": DEEPGRAM_MODEL,
@@ -283,6 +333,7 @@ def health():
         "tts_provider": TTS_PROVIDER if TTS_PROVIDER != "sarvam" or SARVAM_API_KEY else "piper",
         "deepgram": bool(DEEPGRAM_API_KEY),
         "sarvam": bool(SARVAM_API_KEY),
+        "vision_model": VISION_MODEL,
         "piper_voice": PIPER_VOICE or None,
         "sample_rate": SAMPLE_RATE,
         "tts_sample_rate": TTS_RATE,

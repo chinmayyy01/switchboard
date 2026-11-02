@@ -12,6 +12,7 @@ import (
 	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/obs"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Sink interface {
@@ -120,13 +121,44 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	if lang == "" {
 		lang = "en"
 	}
-	span.SetAttributes(attribute.String("lang", lang))
 
 	if err := s.sink.EventJSON(map[string]any{"type": "stt.final", "text": tr.Text, "lang": lang}); err != nil {
 		return err
 	}
 
-	if !hasWords(tr.Text) {
+	return s.afterSTT(ctx, tr.Text, tr.Confidence, lang, t0, sttDone.Sub(t0))
+}
+
+func (s *Session) HandleText(ctx context.Context, text, lang string) error {
+	if s.humanOwned.Load() {
+		return nil
+	}
+	s.firstAudio.Store(0)
+	s.cancelSpeech.Store(false)
+
+	ctx, span := obs.Tracer().Start(ctx, "turn")
+	defer span.End()
+
+	t0 := time.Now()
+	if lang == "" {
+		lang = s.lang
+	}
+	if lang == "" {
+		lang = "en"
+	}
+
+	if err := s.sink.EventJSON(map[string]any{"type": "stt.final", "text": text, "lang": lang}); err != nil {
+		return err
+	}
+
+	return s.afterSTT(ctx, text, 1.0, lang, t0, 0)
+}
+
+func (s *Session) afterSTT(ctx context.Context, text string, confidence float64, lang string, t0 time.Time, sttMs time.Duration) error {
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attribute.String("lang", lang))
+
+	if !hasWords(text) {
 		s.emptyTurns++
 		if s.emptyTurns >= 2 {
 			s.escalated = true
@@ -141,7 +173,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	}
 	s.emptyTurns = 0
 
-	if guard.LooksLikeInjection(tr.Text) {
+	if guard.LooksLikeInjection(text) {
 		s.escalated = true
 		s.escalationReason = "prompt_injection"
 		metrics.Escalation()
@@ -151,7 +183,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 		return s.sink.EventJSON(map[string]any{"type": "escalation", "reason": "prompt_injection"})
 	}
 
-	sig := s.tracker.Observe(tr.Text, tr.Confidence)
+	sig := s.tracker.Observe(text, confidence)
 	if dec := s.policy.Decide(sig); dec.Escalate {
 		s.escalated = true
 		s.escalationReason = dec.Reason
@@ -218,7 +250,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 
 	brainCtx, brainSpan := obs.Tracer().Start(ctx, "brain")
 	out, err := s.brain.Handle(brainCtx, Turn{
-		UserText:   tr.Text,
+		UserText:   text,
 		History:    s.history,
 		Lang:       lang,
 		OnSentence: onSentence,
@@ -309,7 +341,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 
 	if err := s.sink.EventJSON(map[string]any{
 		"type":              "latency",
-		"stt_ms":            sttDone.Sub(t0).Milliseconds(),
+		"stt_ms":            sttMs.Milliseconds(),
 		"brain_ms":          brainDone.Sub(t1).Milliseconds(),
 		"tts_ms":            ttsMs,
 		"first_audio_ms":    firstAudioMs,
@@ -321,7 +353,7 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	}
 
 	s.history = append(s.history,
-		Message{Role: "user", Content: tr.Text},
+		Message{Role: "user", Content: text},
 		Message{Role: "assistant", Content: reply},
 	)
 

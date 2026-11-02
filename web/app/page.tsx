@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { BookingCard } from "@/components/BookingCard";
+import { PhotoCard } from "@/components/PhotoCard";
 import { Badge, Card, Empty, SectionHeading, Stat } from "@/components/ui";
 import { useBridge } from "@/lib/useBridge";
 import { useSupervisor, type Call } from "@/lib/useSupervisor";
@@ -69,6 +70,7 @@ export default function Page() {
     refreshDevices,
     startCall,
     endCall,
+    sendText,
   } = useSwitchboard();
   const { calls, connected } = useSupervisor();
   const [tab, setTab] = useState<Tab>("overview");
@@ -476,6 +478,7 @@ export default function Page() {
 
                 <div className="space-y-6">
                   <BookingCard booking={booking} />
+                  <PhotoCard inCall={inCall} onSendText={sendText} />
 
                   <Card className="p-6">
                     <div className="flex items-center justify-between gap-3">

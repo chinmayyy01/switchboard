@@ -85,8 +85,7 @@ export function useSwitchboard() {
   const seqRef = useRef(0);
   const inflightRef = useRef<Map<number, number>>(new Map());
 
-  const interrupt = useCallback(() => {
-    interruptedRef.current = true;
+  const interrupt = useCallback(() => {    interruptedRef.current = true;
     for (const src of sourcesRef.current) {
       try {
         src.stop();
@@ -101,6 +100,18 @@ export function useSwitchboard() {
     setStatus("listening…");
     wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
   }, []);
+
+  const sendText = useCallback(
+    (text: string) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(
+        JSON.stringify({ type: "user.text", text, lang: agentLang || "en" }),
+      );
+      return true;
+    },
+    [agentLang],
+  );
 
   const playPCM = useCallback((buf: ArrayBuffer) => {
     if (interruptedRef.current) return;
@@ -423,6 +434,7 @@ export function useSwitchboard() {
     refreshDevices,
     startCall,
     endCall,
+    sendText,
   };
 }
 
