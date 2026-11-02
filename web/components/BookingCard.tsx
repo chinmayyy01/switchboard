@@ -57,10 +57,10 @@ export function BookingCard({ booking }: { booking: Booking }) {
     <Card className="p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold tracking-tight text-slate-900">
+          <h2 className="text-base font-semibold tracking-tight text-[#EAE5DC]">
             Booking
           </h2>
-          <p className="text-sm text-slate-500">Live from the agent&apos;s tools</p>
+          <p className="text-sm text-[#A8A092]">Live from the agent&apos;s tools</p>
         </div>
         <Badge tone={tone}>{status}</Badge>
       </div>
@@ -72,7 +72,7 @@ export function BookingCard({ booking }: { booking: Booking }) {
         <Row label="Callback" value={phone} />
       </dl>
 
-      <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+      <div className="mt-4 overflow-hidden rounded-xl border border-[#3A3A3A] bg-[#2A2A2A]">
         {mapSrc ? (
           <iframe
             title="Service address"
@@ -80,22 +80,23 @@ export function BookingCard({ booking }: { booking: Booking }) {
             className="h-44 w-full"
             loading="lazy"
             referrerPolicy="no-referrer-when-downgrade"
+            style={{ filter: "invert(0.9) hue-rotate(180deg)" }}
           />
         ) : (
-          <div className="grid h-44 place-items-center px-4 text-center text-xs text-slate-400">
+          <div className="grid h-44 place-items-center px-4 text-center text-xs text-[#8A8379]">
             The map appears once the agent has the service address.
           </div>
         )}
       </div>
 
-      <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+      <div className="mt-2 flex items-center justify-between text-[11px] text-[#8A8379]">
         <span>{locating ? "Locating address…" : geo ? geo.display : ""}</span>
         {booking.address && (
           <a
             href={`https://www.openstreetmap.org/search?query=${encodeURIComponent(booking.address)}`}
             target="_blank"
             rel="noreferrer"
-            className="font-medium text-indigo-600 hover:underline"
+            className="font-medium text-[#D98E5A] hover:underline"
           >
             Open in maps
           </a>
@@ -116,12 +117,12 @@ function Row({
 }) {
   return (
     <div className="flex items-baseline justify-between gap-4">
-      <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">
+      <dt className="text-xs font-medium uppercase tracking-wide text-[#8A8379]">
         {label}
       </dt>
       <dd
         className={`min-w-0 truncate text-right text-sm ${
-          value ? "text-slate-800" : "text-slate-300"
+          value ? "text-[#EAE5DC]" : "text-[#6E675D]"
         } ${capitalize ? "capitalize" : ""}`}
       >
         {value || "—"}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/chinmay/switchboard/internal/agent"
 	"github.com/chinmay/switchboard/internal/jobs"
+	"github.com/chinmay/switchboard/internal/staff"
 )
 
 type scriptedLLM struct {
@@ -121,5 +122,25 @@ func TestLLMBrainEscalatesOnPersistentNarration(t *testing.T) {
 	}
 	if !out.Escalate || out.EndReason != "tool_narration" {
 		t.Fatalf("expected tool_narration escalation: %+v", out)
+	}
+}
+
+func TestSetTimeOffersAlternativesWhenStaffBusy(t *testing.T) {
+	st := jobs.NewStore()
+	st.SetStaff(staff.New([]staff.Employee{
+		{ID: "a", Name: "A", Skills: []string{"heating"}, Shifts: []string{"morning"}},
+	}))
+	if _, err := st.Book("heating", "2026-11-02", "morning", "1 A Street", "5551112222"); err != nil {
+		t.Fatal(err)
+	}
+	b := NewLLM(st, nil, nil, "rivera", "Rivera Plumbing", nil)
+	b.service = "heating"
+	args, _ := json.Marshal(map[string]string{"date": "2026-11-02", "window": "morning"})
+	result, _, _, _ := b.execTool(context.Background(), agent.ToolCall{Name: "set_time", Args: args}, "en")
+	if !strings.Contains(result, "alternatives") {
+		t.Fatalf("missing alternatives: %s", result)
+	}
+	if strings.Contains(result, `"ok":true`) {
+		t.Fatalf("should not accept a busy slot: %s", result)
 	}
 }

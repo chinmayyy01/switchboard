@@ -42,6 +42,7 @@ type Session struct {
 	emptyTurns       int
 	firstAudio       atomic.Int64
 	cancelSpeech     atomic.Bool
+	hold             atomic.Bool
 	escalated        bool
 	escalationReason string
 	humanOwned       *atomic.Bool
@@ -59,7 +60,12 @@ func NewSession(sel Selector, brain Brain, sink Sink) *Session {
 	}
 }
 
-func (s *Session) SetHumanOwned(v bool) { s.humanOwned.Store(v) }
+func (s *Session) SetHumanOwned(v bool) {
+	s.humanOwned.Store(v)
+	if v {
+		s.cancelSpeech.Store(true)
+	}
+}
 
 func (s *Session) SetLanguage(lang string) { s.lang = lang }
 
@@ -93,6 +99,9 @@ func (s *Session) OnAudio(ctx context.Context, pcm []int16) error {
 
 func (s *Session) respond(ctx context.Context, pcm []int16) error {
 	if s.humanOwned.Load() {
+		return nil
+	}
+	if s.hold.Load() {
 		return nil
 	}
 	s.firstAudio.Store(0)
@@ -131,6 +140,9 @@ func (s *Session) respond(ctx context.Context, pcm []int16) error {
 
 func (s *Session) HandleText(ctx context.Context, text, lang string) error {
 	if s.humanOwned.Load() {
+		return nil
+	}
+	if s.hold.Load() {
 		return nil
 	}
 	s.firstAudio.Store(0)
@@ -275,6 +287,9 @@ func (s *Session) afterSTT(ctx context.Context, text string, confidence float64,
 		if err := s.sink.EventJSON(map[string]any{"type": "escalation", "reason": reason}); err != nil {
 			return err
 		}
+	}
+	if out.Hold {
+		s.hold.Store(true)
 	}
 
 	if out.ToolCalled != nil {

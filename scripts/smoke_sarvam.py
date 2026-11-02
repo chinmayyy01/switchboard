@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Live Sarvam smoke test: place a scripted booking call through the real stack.
 
-Requires the Go server, the AI service, and SARVAM_API_KEY. Caller audio is
-synthesized with Sarvam TTS (priya) at 16 kHz, then streamed to /ws. The agent
-uses Saaras STT, sarvam-105b-conversations, and Bulbul TTS.
+Caller audio is synthesized with Sarvam TTS (priya, 16 kHz), then streamed to
+/ws. The agent uses Saaras STT, sarvam-105b-conversations, and Bulbul TTS.
+
+The caller follows the agent's questions instead of a fixed turn order, so VAD
+segmenting or a repeated question does not desynchronise the test.
 
 Run: make smoke
 """
@@ -113,27 +115,45 @@ async def read_turn(ws):
             return events, tools, audio_bytes, first_audio
 
 
+def choose(text):
+    low = text.lower()
+    if "confirm" in low and "address" in low:
+        return "yes"
+    if "address" in low:
+        return "address"
+    if "book" in low or "shall i" in low:
+        return "book"
+    if "number" in low or "callback" in low:
+        return "phone"
+    if "day" in low or "when" in low or "date" in low:
+        return "date"
+    if "book" in low or "shall i" in low:
+        return "book"
+    if "right" in low or "correct" in low or "confirm" in low:
+        return "yes"
+    if "service" in low or "help" in low:
+        return "service"
+    return "yes"
+
+
 async def main():
     if not API_KEY:
         raise SystemExit("SARVAM_API_KEY is not set in .env")
 
     target = date.today() + timedelta(days=14 + random.randint(0, 7))
     day = f"{target.strftime('%B')} {target.day}"
-    lines = [
-        "My kitchen sink is leaking and I need a plumber.",
-        "Yes, that's right.",
-        "It's 123 Main Street.",
-        "Yes, that's right.",
-        f"{day} in the morning at 10.",
-        "Yes, that's right.",
-        "My phone number is 555 123 4567.",
-        "Yes, that's right.",
-        "Yes, book it.",
-    ]
+    caller = {
+        "service": "My kitchen sink is leaking.",
+        "address": "123 Main Street.",
+        "date": f"{day} in the morning.",
+        "phone": "415 867 5309",
+        "yes": "Yes, that's right.",
+        "book": "Yes, book it.",
+    }
 
     print(f"tenant={TENANT} date={day} caller_voice={SPEAKER}")
     print("synthesizing caller audio...")
-    utterances = [synth(line) for line in lines]
+    pcm = {k: synth(v) for k, v in caller.items()}
 
     url = f"{WS_URL}?tenant={TENANT}"
     async with websockets.connect(url, max_size=None) as ws:
@@ -156,17 +176,25 @@ async def main():
         all_events = []
         first_audios = []
         started = time.time()
+        action = "service"
 
-        for n, (line, pcm) in enumerate(zip(lines, utterances), 1):
-            print(f"turn {n}: {line}")
-            await send_utterance(ws, pcm)
+        for n in range(1, 15):
+            print(f"turn {n}: {caller[action]}")
+            await send_utterance(ws, pcm[action])
             events, tools, audio, first = await read_turn(ws)
             all_events.extend(events)
             all_tools.extend(tools)
             lat = next((e for e in events if e.get("type") == "latency"), None)
             if lat and lat.get("first_audio_ms", -1) >= 0:
                 first_audios.append(lat["first_audio_ms"])
-            await asyncio.sleep(0.3)
+            text = ""
+            for e in events:
+                if e.get("type") == "agent.text":
+                    text = e.get("text", "")
+            if "book" in tools:
+                break
+            action = choose(text)
+            await asyncio.sleep(0.2)
 
         try:
             while True:

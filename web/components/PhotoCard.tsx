@@ -65,10 +65,10 @@ export function PhotoCard({
     <Card className="p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold tracking-tight text-slate-900">
+          <h2 className="text-base font-semibold tracking-tight text-[#EAE5DC]">
             Show me the problem
           </h2>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-[#A8A092]">
             Upload a photo; the agent looks at it.
           </p>
         </div>
@@ -97,14 +97,14 @@ export function PhotoCard({
         <img
           src={preview}
           alt="Uploaded problem"
-          className="mt-4 h-40 w-full rounded-xl border border-slate-200 object-cover"
+          className="mt-4 h-40 w-full rounded-xl border border-[#3A3A3A] object-cover"
         />
       ) : (
         <button
           type="button"
           onClick={pick}
           disabled={!inCall}
-          className="mt-4 grid h-40 w-full place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-4 grid h-40 w-full place-items-center rounded-xl border border-dashed border-[#3f3f3f] bg-[#2E2E2E] text-sm text-[#A8A092] transition-colors hover:border-[#C87941] hover:bg-[#C87941]/10 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {inCall ? "Take or choose a photo" : "Start a call to add a photo"}
         </button>
@@ -116,27 +116,27 @@ export function PhotoCard({
             type="button"
             onClick={pick}
             disabled={!inCall}
-            className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-700 disabled:opacity-50"
+            className="rounded-lg bg-[#2E2E2E] px-3 py-1.5 text-xs font-semibold text-[#EAE5DC] transition-colors hover:bg-[#3A3A3A] disabled:opacity-50"
           >
             Change photo
           </button>
           {status === "sent" && (
-            <span className="text-xs text-slate-400">Sent to the agent</span>
+            <span className="text-xs text-[#8A8379]">Sent to the agent</span>
           )}
         </div>
       )}
 
       {status === "analyzing" && (
-        <p className="mt-3 text-xs text-amber-600">
+        <p className="mt-3 text-xs text-amber-300">
           Analyzing the photo locally… this can take a few seconds.
         </p>
       )}
       {description && (
-        <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">
+        <p className="mt-3 rounded-xl bg-[#2A2A2A] p-3 text-xs leading-relaxed text-[#B5AEA3]">
           {description}
         </p>
       )}
-      {error && <p className="mt-3 text-xs text-rose-600">{error}</p>}
+      {error && <p className="mt-3 text-xs text-rose-300">{error}</p>}
 
       <input
         ref={inputRef}

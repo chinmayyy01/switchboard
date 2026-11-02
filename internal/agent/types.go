@@ -52,6 +52,7 @@ type Outcome struct {
 	ToolCalled       *ToolCall
 	Citations        []string
 	Escalate         bool
+	Hold             bool
 	EndCall          bool
 	EndReason        string
 	Streamed         bool

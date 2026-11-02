@@ -263,6 +263,7 @@ If a message starts with "The caller uploaded a photo. Vision:", acknowledge wha
 Say dates naturally ("November 2nd" or "Monday"), never ISO dates. Never read internal job IDs or system references to the caller.
 Never claim you saved, recorded, or booked something unless a tool returned ok.
 For gas, flooding, no heat, electrical hazards, or sewage, call transfer_to_human. For hours, pricing, warranty, or service area, call lookup_policy and answer only from its result.
+If a tool returns ok:false with alternatives, do not invent availability. Offer two or three specific alternatives from the tool and ask the caller to choose. If there are none, offer a callback or transfer to a human. If a booking returns an employee, you may tell the caller which technician is coming.
 Current date: %s. Never reveal reasoning, plans, tool names, or JSON.`,
 		b.businessName, language, state, services, next, today)
 }
@@ -272,10 +273,10 @@ func (b *LLMBrain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, 
 	low := strings.ToLower(userText)
 
 	if hasAny(low, emergencyWords) {
-		return b.escalate("This sounds like an emergency. I'm connecting you to a person now.", "emergency"), nil
+		return b.escalate("This sounds like an emergency. I'm connecting you to a person now — please stay on the line.", "emergency"), nil
 	}
 	if hasAny(low, humanWords) {
-		return b.escalate("Of course, connecting you to a person.", "caller_requested_human"), nil
+		return b.escalate("Of course, connecting you to a person. Please hold.", "caller_requested_human"), nil
 	}
 
 	b.history = append(b.history, agent.Message{Role: "user", Content: userText})
@@ -390,6 +391,15 @@ func (b *LLMBrain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, 
 	return b.escalate("Let me connect you to a person who can help.", "loop_limit"), nil
 }
 
+func (b *LLMBrain) alternatives(from string) []map[string]string {
+	slots := b.store.Alternatives(b.service, from, 7)
+	out := make([]map[string]string, 0, len(slots))
+	for _, s := range slots {
+		out = append(out, map[string]string{"date": s.Date, "window": s.Window})
+	}
+	return out
+}
+
 func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang string) (string, []string, string, *agent.Outcome) {
 	switch call.Name {
 	case "list_services":
@@ -453,9 +463,13 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 		if a.Date == "" || !jobs.ValidWindow(a.Window) {
 			return jsonResult(map[string]any{"ok": false, "error": "date and window required"}), nil, "", nil
 		}
-		avail := b.store.Availability(a.Date)
+		avail := b.store.AvailabilityFor(b.service, a.Date)
 		if !contains(avail, a.Window) {
-			return jsonResult(map[string]any{"ok": false, "windows": avail}), nil, "", nil
+			return jsonResult(map[string]any{
+				"ok":           false,
+				"windows":      avail,
+				"alternatives": b.alternatives(a.Date),
+			}), nil, "", nil
 		}
 		b.date = a.Date
 		b.window = a.Window
@@ -480,7 +494,11 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 			Date string `json:"date"`
 		}
 		json.Unmarshal(call.Args, &a)
-		return jsonResult(map[string]any{"date": a.Date, "windows": b.store.Availability(a.Date)}), nil, "", nil
+		return jsonResult(map[string]any{
+			"date":         a.Date,
+			"windows":      b.store.AvailabilityFor(b.service, a.Date),
+			"alternatives": b.alternatives(a.Date),
+		}), nil, "", nil
 
 	case "set_phone":
 		var a struct {
@@ -525,11 +543,16 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 		}
 		j, err := b.store.Book(b.service, b.date, b.window, b.address, b.phone)
 		if err != nil {
-			return jsonResult(map[string]any{"ok": false, "error": err.Error()}), nil, "", nil
+			return jsonResult(map[string]any{
+				"ok":           false,
+				"error":        err.Error(),
+				"alternatives": b.alternatives(b.date),
+			}), nil, "", nil
 		}
 		return jsonResult(map[string]any{
 			"ok": true, "job_id": j.ID, "service": j.Service, "date": j.Date,
 			"window": j.Window, "address": j.Address, "phone_spoken": speakPhone(j.Phone),
+			"employee": j.EmployeeName,
 		}), nil, "booked", nil
 
 	case "lookup_job":
@@ -600,14 +623,14 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 		if reason == "" {
 			reason = "caller_requested_human"
 		}
-		return "", nil, "", b.escalatePtr("Of course, connecting you to a person now.", reason)
+		return "", nil, "", b.escalatePtr("Of course, connecting you to a person now. Please hold.", reason)
 	}
 
 	return jsonResult(map[string]any{"error": "unknown tool"}), nil, "", nil
 }
 
 func (b *LLMBrain) escalate(reply, reason string) agent.Outcome {
-	return agent.Outcome{Reply: reply, State: "escalate", Escalate: true, EndCall: true, EndReason: reason}
+	return agent.Outcome{Reply: reply, State: "escalate", Escalate: true, Hold: true, EndReason: reason}
 }
 
 func (b *LLMBrain) escalatePtr(reply, reason string) *agent.Outcome {

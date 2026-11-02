@@ -34,3 +34,6 @@ inference/voices/
 
 # --- OS / editor ---
 .DS_Store
+
+# Next generated agent rules
+web/AGENTS.md

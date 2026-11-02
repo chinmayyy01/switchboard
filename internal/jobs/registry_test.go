@@ -3,7 +3,7 @@ package jobs
 import "testing"
 
 func TestRegistryIsolation(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry("")
 	a := r.For("a")
 	b := r.For("b")
 

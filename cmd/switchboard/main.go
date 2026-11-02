@@ -45,7 +45,7 @@ func main() {
 	h := hub.New()
 	st := store.New(*dataDir, 500)
 	reg := ws.NewBridgeRegistry()
-	jobsReg := jobs.NewRegistry()
+	jobsReg := jobs.NewRegistry("tenants")
 
 	tenants, err := tenant.Load("tenants")
 	if err != nil {
@@ -63,6 +63,7 @@ func main() {
 	mux.HandleFunc("POST /api/calls/{id}/takeover", requireToken(token, api.TakeOver(h)))
 	mux.HandleFunc("GET /api/report", requireToken(token, api.Report(st)))
 	mux.HandleFunc("GET /api/geocode", api.Geocode())
+	mux.HandleFunc("GET /api/staff", requireToken(token, api.Staff(jobsReg)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		brain := "rules"
 		if openai.NewSarvamFromEnv() != nil {

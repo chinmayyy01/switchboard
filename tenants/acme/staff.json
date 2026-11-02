@@ -1,0 +1,32 @@
+{
+  "employees": [
+    {
+      "id": "acme-1",
+      "name": "Emma Davis",
+      "skills": ["leak repair", "drain cleaning"],
+      "days": ["mon", "tue", "wed", "thu", "fri", "sat"],
+      "shifts": ["morning", "afternoon"]
+    },
+    {
+      "id": "acme-2",
+      "name": "Jordan Lee",
+      "skills": ["water heater", "heating"],
+      "days": ["mon", "tue", "wed", "thu", "fri"],
+      "shifts": ["morning"]
+    },
+    {
+      "id": "acme-3",
+      "name": "Carlos Ruiz",
+      "skills": ["ac service", "maintenance"],
+      "days": ["tue", "wed", "thu", "fri", "sat"],
+      "shifts": ["afternoon", "evening"]
+    },
+    {
+      "id": "acme-4",
+      "name": "Nia Brooks",
+      "skills": ["leak repair", "ac service"],
+      "days": ["wed", "thu", "fri", "sat", "sun"],
+      "shifts": ["morning", "afternoon"]
+    }
+  ]
+}

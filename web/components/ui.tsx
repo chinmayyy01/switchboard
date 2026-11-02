@@ -9,7 +9,7 @@ export function Card({
 }) {
   return (
     <div
-      className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${className}`}
+      className={`rounded-2xl border border-[#3A3A3A] bg-[#242424] shadow-none ${className}`}
     >
       {children}
     </div>
@@ -19,11 +19,11 @@ export function Card({
 type Tone = "slate" | "indigo" | "emerald" | "amber" | "rose";
 
 const tones: Record<Tone, string> = {
-  slate: "bg-slate-100 text-slate-600",
-  indigo: "bg-indigo-50 text-indigo-700",
-  emerald: "bg-emerald-50 text-emerald-700",
-  amber: "bg-amber-50 text-amber-700",
-  rose: "bg-rose-50 text-rose-700",
+  slate: "bg-[#EAE5DC]/5 text-[#A8A092]",
+  indigo: "bg-[#C87941]/10 text-[#D98E5A]",
+  emerald: "bg-emerald-500/10 text-emerald-300",
+  amber: "bg-amber-500/10 text-amber-300",
+  rose: "bg-rose-500/10 text-rose-300",
 };
 
 export function Badge({
@@ -52,14 +52,14 @@ export function Stat({
   hint?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+    <div className="rounded-2xl border border-[#3A3A3A] bg-[#2A2A2A] p-4">
+      <div className="text-xs font-medium uppercase tracking-wide text-[#A8A092]">
         {label}
       </div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+      <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-[#EAE5DC]">
         {value}
       </div>
-      {hint && <div className="mt-0.5 text-xs text-slate-400">{hint}</div>}
+      {hint && <div className="mt-0.5 text-xs text-[#8A8379]">{hint}</div>}
     </div>
   );
 }
@@ -76,10 +76,10 @@ export function SectionHeading({
   return (
     <div className="mb-3 flex items-end justify-between gap-4">
       <div>
-        <h2 className="text-lg font-semibold tracking-tight text-slate-900">
+        <h2 className="text-lg font-semibold tracking-tight text-[#EAE5DC]">
           {title}
         </h2>
-        {subtitle && <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p>}
+        {subtitle && <p className="mt-0.5 text-sm text-[#A8A092]">{subtitle}</p>}
       </div>
       {action}
     </div>
@@ -88,7 +88,7 @@ export function SectionHeading({
 
 export function Empty({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-200 bg-white/50 px-4 py-8 text-center text-sm text-slate-400">
+    <div className="rounded-2xl border border-dashed border-[#3A3A3A] bg-[#EAE5DC]/[0.03] px-4 py-8 text-center text-sm text-[#8A8379]">
       {children}
     </div>
   );

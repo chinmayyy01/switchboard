@@ -183,6 +183,7 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 		kb = c
 	}
 	jobStore := jobsReg.For(t.ID)
+	jobStore.SetWindows(t.Windows)
 
 	var brain agent.Brain
 	if o := openai.NewSarvamFromEnv(); o != nil {

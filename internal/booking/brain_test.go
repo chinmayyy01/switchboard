@@ -53,8 +53,8 @@ func TestBookingFlow(t *testing.T) {
 func TestEmergencyEscalates(t *testing.T) {
 	b := newBrain(jobs.NewStore())
 	out := run(t, b, "I smell gas in the kitchen")
-	if !out.Escalate || !out.EndCall || out.EndReason != "emergency" {
-		t.Fatalf("expected emergency escalation, got %+v", out)
+	if !out.Escalate || !out.Hold || out.EndCall || out.EndReason != "emergency" {
+		t.Fatalf("expected emergency hold, got %+v", out)
 	}
 }
 

@@ -1,0 +1,46 @@
+{
+  "employees": [
+    {
+      "id": "tech-1",
+      "name": "Maya Patel",
+      "skills": ["leak repair", "plumbing repair"],
+      "days": ["mon", "tue", "wed", "thu", "fri", "sat"],
+      "shifts": ["morning", "afternoon"]
+    },
+    {
+      "id": "tech-2",
+      "name": "Luis Ortega",
+      "skills": ["leak repair", "drain cleaning"],
+      "days": ["mon", "tue", "wed", "thu", "fri"],
+      "shifts": ["morning", "afternoon"]
+    },
+    {
+      "id": "tech-3",
+      "name": "Sam Chen",
+      "skills": ["water heater", "heating"],
+      "days": ["mon", "tue", "wed", "thu", "fri"],
+      "shifts": ["morning", "afternoon"]
+    },
+    {
+      "id": "tech-4",
+      "name": "Aisha Khan",
+      "skills": ["ac service", "heating", "maintenance"],
+      "days": ["mon", "tue", "wed", "thu", "fri", "sat"],
+      "shifts": ["morning", "afternoon", "evening"]
+    },
+    {
+      "id": "tech-5",
+      "name": "Noah Williams",
+      "skills": ["drain cleaning", "maintenance"],
+      "days": ["tue", "wed", "thu", "fri", "sat"],
+      "shifts": ["afternoon", "evening"]
+    },
+    {
+      "id": "tech-6",
+      "name": "Priya Raman",
+      "skills": ["leak repair", "water heater"],
+      "days": ["wed", "thu", "fri", "sat", "sun"],
+      "shifts": ["morning", "evening"]
+    }
+  ]
+}

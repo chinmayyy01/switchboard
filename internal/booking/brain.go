@@ -81,9 +81,9 @@ func (b *Brain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, err
 
 	switch {
 	case hasAny(low, emergencyWords):
-		return b.escalate("This sounds like an emergency. I'm connecting you to a person now.", "emergency"), nil
+		return b.escalate("This sounds like an emergency. I'm connecting you to a person now — please stay on the line.", "emergency"), nil
 	case hasAny(low, humanWords):
-		return b.escalate("Of course, connecting you to a person.", "caller_requested_human"), nil
+		return b.escalate("Of course, connecting you to a person. Please hold.", "caller_requested_human"), nil
 	case hasAny(low, faqWords):
 		return b.answerFAQ(ctx, text, turn.Lang)
 	}
@@ -185,7 +185,7 @@ func (b *Brain) timeStep(low, text string) (agent.Outcome, error) {
 		return b.out("Which day works for you?", "time", nil, false, ""), nil
 	}
 
-	avail := b.store.Availability(b.date)
+	avail := b.store.AvailabilityFor(b.service, b.date)
 	if len(avail) == 0 {
 		b.date = ""
 		return b.out("That day is fully booked. What other day works?", "time", nil, false, ""), nil
@@ -308,7 +308,7 @@ func (b *Brain) reschedTime(low string) (agent.Outcome, error) {
 	if b.date == "" || b.window == "" {
 		return b.out("What new day and window? Morning, afternoon, or evening.", "resched_time", nil, false, ""), nil
 	}
-	avail := b.store.Availability(b.date)
+	avail := b.store.AvailabilityFor(b.service, b.date)
 	if !contains(avail, b.window) {
 		b.window = ""
 		return b.out("That window is full on "+prettyDate(b.date)+". I have "+joinWindows(avail)+". Which works?", "resched_time", toolCall("check_availability", map[string]any{"date": b.date}), false, ""), nil
@@ -350,7 +350,7 @@ func (b *Brain) answerFAQ(ctx context.Context, question, lang string) (agent.Out
 
 func (b *Brain) escalate(reply, reason string) agent.Outcome {
 	b.state = "escalate"
-	return agent.Outcome{Reply: reply, State: "escalate", Escalate: true, EndCall: true, EndReason: reason}
+	return agent.Outcome{Reply: reply, State: "escalate", Escalate: true, Hold: true, EndReason: reason}
 }
 
 func (b *Brain) out(reply, state string, tool *agent.ToolCall, end bool, reason string) agent.Outcome {

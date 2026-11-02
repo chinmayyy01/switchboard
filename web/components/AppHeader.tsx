@@ -3,7 +3,7 @@ import Link from "next/link";
 
 function Logo() {
   return (
-    <span className="grid h-9 w-9 place-items-center rounded-xl bg-indigo-600 text-white shadow-sm">
+    <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#C87941] text-[#111111] shadow-none">
       <svg
         viewBox="0 0 24 24"
         className="h-5 w-5"
@@ -32,8 +32,8 @@ function NavLink({
       href={href}
       className={`rounded-lg px-3 py-1.5 font-medium transition-colors ${
         active
-          ? "bg-slate-900 text-white"
-          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          ? "bg-[#C87941] text-[#111111]"
+          : "text-[#A8A092] hover:bg-[#2A2A2A] hover:text-[#EAE5DC]"
       }`}
     >
       {children}
@@ -43,11 +43,11 @@ function NavLink({
 
 export function AppHeader({ current }: { current?: "caller" | "supervisor" }) {
   return (
-    <header className="sticky top-0 z-10 border-b border-slate-200/80 bg-white/80 backdrop-blur">
+    <header className="sticky top-0 z-10 border-b border-[#3A3A3A] bg-[#242424]/80 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
         <Link href="/" className="flex items-center gap-2.5">
           <Logo />
-          <span className="text-[15px] font-semibold tracking-tight text-slate-900">
+          <span className="text-[15px] font-semibold tracking-tight text-[#EAE5DC]">
             Switchboard
           </span>
         </Link>
