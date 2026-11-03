@@ -1,0 +1,19 @@
+[Unit]
+Description=Switchboard web console
+After=network.target
+
+[Service]
+Type=simple
+User=switchboard
+Group=switchboard
+WorkingDirectory=/opt/switchboard/web
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

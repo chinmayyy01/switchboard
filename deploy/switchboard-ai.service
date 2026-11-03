@@ -1,0 +1,19 @@
+[Unit]
+Description=Switchboard AI service
+After=network.target ollama.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=switchboard
+Group=switchboard
+WorkingDirectory=/opt/switchboard
+EnvironmentFile=/opt/switchboard/.env
+ExecStart=/opt/switchboard/inference/.venv/bin/uvicorn app:app --app-dir /opt/switchboard/inference --host 127.0.0.1 --port 8100
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -23,6 +23,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/" },
 };
 
+const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
 const demo = "/console?tab=test";
 
 const stats = [
@@ -118,7 +119,9 @@ const faq = [
   },
   {
     q: "How do I try it?",
-    a: "Open the console, choose a tenant, and start a call in your browser. No signup and no credit card.",
+    a: authDisabled
+      ? "Open the console and start a call in your browser. Authentication is temporarily disabled in this local preview."
+      : "Sign in with an account from the owner, choose a tenant, and start a call in your browser. Standard accounts include 2 free calls. The owner account has unlimited calls.",
   },
 ];
 
@@ -189,13 +192,16 @@ export default function Page() {
                   <ArrowRight size={16} aria-hidden="true" />
                 </Link>
                 <p className={`${type.caption2} mt-3 text-[#A8A092]`}>
-                  Live in your browser. No signup, no credit card.
+                  {authDisabled
+                    ? "Local preview. Auth is temporarily disabled; calls are unlimited."
+                    : "Live in your browser. Standard accounts get 2 free calls; owner accounts are unlimited."}
                 </p>
               </div>
 
               <div className="mt-8 flex flex-wrap gap-2">
                 {[
                   "0.65s to 1.3s first audio",
+                  "2 free calls",
                   "Sarvam speech",
                   "Live transcript",
                 ].map((item) => (
@@ -547,7 +553,9 @@ export default function Page() {
                   <ArrowRight size={16} aria-hidden="true" />
                 </Link>
                 <p className={`${type.caption2} mt-3 text-[#EAE5DC]/50`}>
-                  Live in your browser. No signup, no credit card.
+                  {authDisabled
+                    ? "Local preview. Auth is temporarily disabled."
+                    : "2 free calls for standard accounts. Owner accounts are unlimited."}
                 </p>
               </div>
             </div>

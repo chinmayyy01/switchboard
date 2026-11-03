@@ -13,6 +13,7 @@ type Turn struct {
 type Call struct {
 	ID         string    `json:"id"`
 	Tenant     string    `json:"tenant"`
+	AccountID  string    `json:"account_id,omitempty"`
 	Lang       string    `json:"lang"`
 	State      string    `json:"state"`
 	LastText   string    `json:"last_text"`
@@ -39,9 +40,9 @@ func New() *Hub {
 	}
 }
 
-func (h *Hub) Register(id, tenant string) {
+func (h *Hub) Register(id, tenant, accountID string) {
 	h.mu.Lock()
-	h.calls[id] = &Call{ID: id, Tenant: tenant, StartedAt: time.Now()}
+	h.calls[id] = &Call{ID: id, Tenant: tenant, AccountID: accountID, StartedAt: time.Now()}
 	h.publishLocked()
 	h.mu.Unlock()
 }
@@ -74,6 +75,16 @@ func (h *Hub) AddTurn(id, role, text string) {
 	h.mutate(id, func(c *Call) {
 		c.Transcript = append(c.Transcript, Turn{Role: role, Text: text})
 	})
+}
+
+func (h *Hub) Call(id string) (Call, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.calls[id]
+	if !ok {
+		return Call{}, false
+	}
+	return *c, true
 }
 
 func (h *Hub) Transcript(id string) []Turn {

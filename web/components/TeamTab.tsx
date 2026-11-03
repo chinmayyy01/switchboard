@@ -4,11 +4,7 @@ import { useEffect, useState } from "react";
 import { Badge, Card, Empty, SectionHeading } from "@/components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
-const TOKEN = process.env.NEXT_PUBLIC_SUPERVISOR_TOKEN ?? "";
-const api = (p: string) =>
-  TOKEN
-    ? `${API}${p}${p.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`
-    : `${API}${p}`;
+const api = (p: string) => `${API}${p}`;
 
 type Member = {
   id: string;
@@ -19,15 +15,24 @@ type Member = {
   busy: string[];
 };
 
-export function TeamTab() {
-  const [tenant, setTenant] = useState("rivera");
+export function TeamTab({
+  tenant,
+  isOwner,
+  onTenantChange,
+}: {
+  tenant: string;
+  isOwner: boolean;
+  onTenantChange: (tenant: string) => void;
+}) {
   const [members, setMembers] = useState<Member[]>([]);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       try {
-        const res = await fetch(api(`/api/staff?tenant=${tenant}`));
+        const res = await fetch(api(`/api/staff?tenant=${tenant}`), {
+          credentials: "include",
+        });
         if (!res.ok) return;
         const data = (await res.json()) as Member[];
         if (active) setMembers(data ?? []);
@@ -49,8 +54,9 @@ export function TeamTab() {
         action={
           <select
             value={tenant}
-            onChange={(e) => setTenant(e.target.value)}
-            className="rounded-lg border border-[#3A3A3A] bg-[#242424] px-3 py-1.5 text-xs font-medium text-[#D8D2C7]"
+            onChange={(e) => onTenantChange(e.target.value)}
+            disabled={!isOwner}
+            className="rounded-lg border border-[#3A3A3A] bg-[#242424] px-3 py-1.5 text-xs font-medium text-[#D8D2C7] disabled:opacity-50"
           >
             <option value="rivera">Rivera Plumbing</option>
             <option value="acme">Acme Home</option>

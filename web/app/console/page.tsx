@@ -1,22 +1,20 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { BookingCard } from "@/components/BookingCard";
 import { PhotoCard } from "@/components/PhotoCard";
 import { TeamTab } from "@/components/TeamTab";
 import { Badge, Card, Empty, SectionHeading, Stat } from "@/components/ui";
 import { useBridge } from "@/lib/useBridge";
+import { useSession } from "@/lib/session";
 import { useSupervisor, type Call } from "@/lib/useSupervisor";
 import { useSwitchboard } from "@/lib/useSwitchboard";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
-const AI = process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8100";
-const TOKEN = process.env.NEXT_PUBLIC_SUPERVISOR_TOKEN ?? "";
-const api = (p: string) =>
-  TOKEN
-    ? `${API}${p}${p.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`
-    : `${API}${p}`;
+const AI = process.env.NEXT_PUBLIC_AI_URL ?? "http://127.0.0.1:8100";
+const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
+const api = (p: string) => `${API}${p}`;
 
 type Tab = "overview" | "test" | "live" | "calls" | "evals" | "team";
 
@@ -75,6 +73,7 @@ export default function Page() {
     endCall,
     sendText,
   } = useSwitchboard();
+  const { account, logout, refresh } = useSession();
   const { calls, connected } = useSupervisor();
   const [tab, setTab] = useState<Tab>("overview");
   const [selectedId, setSelectedId] = useState("");
@@ -85,6 +84,7 @@ export default function Page() {
   const [records, setRecords] = useState<CallRecord[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [expandedId, setExpandedId] = useState("");
+  const wasInCall = useRef(false);
   const [engine, setEngine] = useState<{
     brain?: string;
     stt?: string;
@@ -96,12 +96,18 @@ export default function Page() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [r, rep] = await Promise.all([
-          fetch(api("/api/calls")).then((x) => x.json()),
-          fetch(api("/api/report")).then((x) => x.json()),
+        const [callsRes, reportRes] = await Promise.all([
+          fetch(api("/api/calls"), { credentials: "include" }),
+          fetch(api("/api/report"), { credentials: "include" }),
         ]);
-        setRecords(r ?? []);
-        setReport(rep ?? null);
+        if (callsRes.status === 401) {
+          window.location.assign("/login");
+          return;
+        }
+        const calls = callsRes.ok ? await callsRes.json() : [];
+        const report = reportRes.ok ? await reportRes.json() : null;
+        setRecords(Array.isArray(calls) ? calls : []);
+        setReport(report);
       } catch {}
     };
     load();
@@ -134,10 +140,34 @@ export default function Page() {
     if (t && allowed.includes(t)) setTab(t as Tab);
   }, []);
 
+  useEffect(() => {
+    if (account && !account.is_owner && account.tenant_id) {
+      setTenant(account.tenant_id);
+    }
+  }, [account]);
+
+  useEffect(() => {
+    if (inCall) {
+      refresh();
+      wasInCall.current = true;
+    } else if (wasInCall.current) {
+      refresh();
+      wasInCall.current = false;
+    }
+  }, [inCall, refresh]);
+
+  const remaining = account
+    ? Math.max(0, account.free_call_limit - account.calls_used)
+    : 0;
+  const unlimited = !!account?.is_owner;
+  const outOfCalls = !!account && !unlimited && remaining <= 0;
+  const activeTenant = account?.is_owner ? tenant : account?.tenant_id || tenant;
+
   const label = async (id: string, should: boolean) => {
     try {
       await fetch(api(`/api/calls/${id}/label`), {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ should_escalate: should }),
       });
@@ -145,8 +175,9 @@ export default function Page() {
   };
 
   const startTest = () => {
+    if (outOfCalls) return;
     setSelectedId("");
-    startCall(lang, tenant, micId);
+    startCall(lang, activeTenant, micId);
     setTab("test");
   };
 
@@ -260,9 +291,29 @@ export default function Page() {
             value={connected ? "live" : "offline"}
             tone={connected ? "emerald" : "rose"}
           />
+          <div className="mt-3 border-t border-[#2E2E2E] pt-3">
+            <div className="truncate px-1 text-[11px] text-[#B5AEA3]">
+              {authDisabled ? "Local preview" : account?.email}
+            </div>
+            <div className="px-1 text-[10px] text-[#8A8379]">
+              {authDisabled
+                ? "Auth disabled"
+                : account?.is_owner
+                  ? "Owner · unlimited calls"
+                  : `Free calls: ${remaining}/${account?.free_call_limit ?? 0}`}
+            </div>
+            {!authDisabled && (
+              <button
+                onClick={() => logout()}
+                className="mt-2 w-full rounded-lg px-1 py-1.5 text-left text-xs font-medium text-[#8A8379] transition-colors hover:text-[#D8D2C7]"
+              >
+                Sign out
+              </button>
+            )}
+          </div>
           <Link
             href="/"
-            className="mt-3 block rounded-lg px-1 py-2 text-xs font-medium text-[#8A8379] transition-colors hover:text-[#D8D2C7]"
+            className="mt-1 block rounded-lg px-1 py-2 text-xs font-medium text-[#8A8379] transition-colors hover:text-[#D8D2C7]"
           >
             Back to site
           </Link>
@@ -278,9 +329,19 @@ export default function Page() {
                 Switchboard
               </span>
             </Link>
-            <Badge tone={connected ? "emerald" : "slate"}>
-              {connected ? "supervisor live" : "supervisor offline"}
-            </Badge>
+            <div className="flex items-center gap-3">
+              <Badge tone={connected ? "emerald" : "slate"}>
+                {connected ? "supervisor live" : "supervisor offline"}
+              </Badge>
+              {!authDisabled && (
+                <button
+                  onClick={() => logout()}
+                  className="text-xs font-medium text-[#8A8379] transition-colors hover:text-[#D8D2C7]"
+                >
+                  Sign out
+                </button>
+              )}
+            </div>
           </div>
           <div className="flex gap-1 overflow-x-auto px-3 pb-2">
             {NAV.map((item) => (
@@ -300,6 +361,23 @@ export default function Page() {
         </div>
 
         <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:py-8">
+          <div
+            className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+              unlimited
+                ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
+                : outOfCalls
+                  ? "border-rose-400/20 bg-rose-500/10 text-rose-300"
+                  : "border-[#C87941]/25 bg-[#C87941]/10 text-[#E8C3A4]"
+            }`}
+          >
+            {authDisabled
+              ? "Local preview · auth is disabled · unlimited calls."
+              : unlimited
+                ? "Owner account · unlimited calls."
+                : outOfCalls
+                  ? "You have used both free calls. Ask the owner for more access."
+                  : `${remaining} of ${account?.free_call_limit ?? 0} free calls left.`}
+          </div>
           {tab === "overview" && (
             <Overview
               calls={calls}
@@ -362,9 +440,9 @@ export default function Page() {
                         Business
                       </span>
                       <select
-                        value={tenant}
+                        value={activeTenant}
                         onChange={(e) => setTenant(e.target.value)}
-                        disabled={inCall}
+                        disabled={inCall || !account?.is_owner}
                         className="w-full rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30 disabled:opacity-50"
                       >
                         <option value="rivera">Rivera Plumbing</option>
@@ -419,14 +497,30 @@ export default function Page() {
 
                   <button
                     onClick={() => (inCall ? endCall() : startTest())}
-                    className={`mt-5 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#111111] ${
+                    disabled={!inCall && outOfCalls}
+                    className={`mt-5 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#111111] disabled:cursor-not-allowed disabled:opacity-50 ${
                       inCall
                         ? "bg-rose-600 text-[#EAE5DC] hover:bg-rose-500 focus:ring-rose-300"
                         : "bg-[#C87941] text-[#111111] hover:bg-[#D98E5A] focus:ring-[#C87941]/40"
                     }`}
                   >
-                    {inCall ? "End call" : "Start call"}
+                    {inCall
+                      ? "End call"
+                      : outOfCalls
+                        ? "No free calls left"
+                        : "Start call"}
                   </button>
+                  <p
+                    className={`mt-2 text-center text-xs ${
+                      outOfCalls ? "text-rose-300" : "text-[#8A8379]"
+                    }`}
+                  >
+                    {unlimited
+                      ? "Owner account · unlimited calls."
+                      : outOfCalls
+                        ? "You have used both free calls."
+                        : `${remaining} of ${account?.free_call_limit ?? 0} free calls left.`}
+                  </p>
 
                   <div className="mt-4 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                     <MiniStat
@@ -835,7 +929,13 @@ export default function Page() {
               </div>
             </div>
           )}
-          {tab === "team" && <TeamTab />}
+          {tab === "team" && (
+            <TeamTab
+              tenant={activeTenant}
+              isOwner={!!account?.is_owner}
+              onTenantChange={setTenant}
+            />
+          )}
         </main>
       </div>
     </div>

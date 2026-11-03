@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 const SUP_URL =
   process.env.NEXT_PUBLIC_SUPERVISOR_WS_URL ??
   "ws://localhost:8090/ws/supervisor";
-const TOKEN = process.env.NEXT_PUBLIC_SUPERVISOR_TOKEN ?? "";
 const SAMPLE_RATE = 16000;
 
 export function useBridge(id: string) {
@@ -33,8 +32,7 @@ export function useBridge(id: string) {
   useEffect(() => {
     if (!id) return;
     let closed = false;
-    const token = TOKEN ? `&token=${encodeURIComponent(TOKEN)}` : "";
-    const ws = new WebSocket(`${SUP_URL}/call?id=${encodeURIComponent(id)}${token}`);
+    const ws = new WebSocket(`${SUP_URL}/call?id=${encodeURIComponent(id)}`);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 

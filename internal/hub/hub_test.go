@@ -13,7 +13,7 @@ func TestHubPublishAndSubscribe(t *testing.T) {
 		t.Fatalf("expected empty initial snapshot, got %d", len(snap))
 	}
 
-	h.Register("call-1", "rivera")
+	h.Register("call-1", "rivera", "acct-1")
 	select {
 	case snap := <-ch:
 		if len(snap) != 1 || snap[0].ID != "call-1" {

@@ -5,12 +5,6 @@ import { useEffect, useState } from "react";
 const SUP_URL =
   process.env.NEXT_PUBLIC_SUPERVISOR_WS_URL ??
   "ws://localhost:8090/ws/supervisor";
-const TOKEN = process.env.NEXT_PUBLIC_SUPERVISOR_TOKEN ?? "";
-
-export function withToken(url: string): string {
-  if (!TOKEN) return url;
-  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`;
-}
 
 export type Turn = { role: string; text: string };
 
@@ -32,7 +26,7 @@ export function useSupervisor() {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const ws = new WebSocket(withToken(SUP_URL));
+    const ws = new WebSocket(SUP_URL);
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
     ws.onerror = () => setConnected(false);

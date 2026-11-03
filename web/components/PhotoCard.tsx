@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge, Card } from "@/components/ui";
 
-const AI = process.env.NEXT_PUBLIC_AI_URL ?? "http://localhost:8100";
+const AI = process.env.NEXT_PUBLIC_AI_URL ?? "http://127.0.0.1:8100";
 
 type Status = "idle" | "analyzing" | "sent" | "error";
 

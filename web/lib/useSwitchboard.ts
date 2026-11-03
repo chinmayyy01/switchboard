@@ -240,12 +240,14 @@ export function useSwitchboard() {
   );
 
   const connect = useCallback((): Promise<WebSocket> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      let settled = false;
       const url = new URL(WS_URL);
       url.searchParams.set("tenant", tenantRef.current);
       const ws = new WebSocket(url.toString());
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
+        settled = true;
         setStatus("connected");
         pingTimerRef.current = setInterval(() => {
           if (ws.readyState !== WebSocket.OPEN) return;
@@ -255,8 +257,20 @@ export function useSwitchboard() {
         }, 1000);
         resolve(ws);
       };
-      ws.onclose = () => setStatus("closed");
-      ws.onerror = () => setStatus("error");
+      ws.onclose = () => {
+        setStatus("closed");
+        if (!settled) {
+          settled = true;
+          reject(new Error("connection closed"));
+        }
+      };
+      ws.onerror = () => {
+        setStatus("error");
+        if (!settled) {
+          settled = true;
+          reject(new Error("connection failed"));
+        }
+      };
       ws.onmessage = onMessage;
       wsRef.current = ws;
     });
@@ -359,7 +373,14 @@ export function useSwitchboard() {
       }
       await ctxRef.current?.resume();
       let ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) ws = await connect();
+      try {
+        if (!ws || ws.readyState !== WebSocket.OPEN) ws = await connect();
+      } catch {
+        setStatus("call failed");
+        wsRef.current?.close();
+        wsRef.current = null;
+        return;
+      }
       ws.send(JSON.stringify({ type: "call.start", lang }));
       streamingRef.current = true;
       setInCall(true);

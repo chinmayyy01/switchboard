@@ -45,14 +45,14 @@ inference/.venv/bin/python inference/ingest.py \
 ```bash
 # from the repo root
 inference/.venv/bin/uvicorn app:app --app-dir inference --host 127.0.0.1 --port 8100
-curl localhost:8100/health
+curl 127.0.0.1:8100/health
 ```
 
 ## Wire the Go service to it
 
 ```bash
 ollama pull qwen3:1.7b
-export INFERENCE_URL=http://localhost:8100
+export INFERENCE_URL=http://127.0.0.1:8100
 export OLLAMA_URL=http://localhost:11434
 export OLLAMA_MODEL=qwen3:1.7b
 go run ./cmd/switchboard

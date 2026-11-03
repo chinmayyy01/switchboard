@@ -2,24 +2,37 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"testing"
 )
 
 type recSink struct {
+	mu     sync.Mutex
 	events []map[string]any
 	audio  int
 }
 
 func (r *recSink) EventJSON(v any) error {
 	if m, ok := v.(map[string]any); ok {
+		r.mu.Lock()
 		r.events = append(r.events, m)
+		r.mu.Unlock()
 	}
 	return nil
 }
 
 func (r *recSink) Audio(pcm []int16) error {
+	r.mu.Lock()
 	r.audio += len(pcm)
+	r.mu.Unlock()
 	return nil
+}
+
+func (r *recSink) snapshot() ([]map[string]any, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	events := append([]map[string]any(nil), r.events...)
+	return events, r.audio
 }
 
 func TestSessionDetectsLanguageAndRunsPipeline(t *testing.T) {
@@ -44,12 +57,13 @@ func TestSessionDetectsLanguageAndRunsPipeline(t *testing.T) {
 		}
 	}
 
-	if sink.audio == 0 {
+	events, audio := sink.snapshot()
+	if audio == 0 {
 		t.Fatal("expected TTS audio, got none")
 	}
 
 	var sawFinal bool
-	for _, e := range sink.events {
+	for _, e := range events {
 		if e["type"] == "stt.final" {
 			sawFinal = true
 			if e["lang"] != "en" {

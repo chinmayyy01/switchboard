@@ -14,10 +14,18 @@ type StaffMember struct {
 
 func Staff(reg *jobs.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenant := r.URL.Query().Get("tenant")
-		if tenant == "" {
-			http.Error(w, "tenant required", http.StatusBadRequest)
+		account, ok := accountFrom(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
+		}
+		tenant := account.TenantID
+		if account.IsOwner {
+			tenant = r.URL.Query().Get("tenant")
+			if tenant == "" {
+				http.Error(w, "tenant required", http.StatusBadRequest)
+				return
+			}
 		}
 		store := reg.For(tenant)
 		if store.Staff == nil {

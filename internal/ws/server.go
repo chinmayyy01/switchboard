@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/chinmay/switchboard/internal/agent"
 	"github.com/chinmay/switchboard/internal/ai"
+	"github.com/chinmay/switchboard/internal/auth"
 	"github.com/chinmay/switchboard/internal/booking"
 	"github.com/chinmay/switchboard/internal/guard"
 	"github.com/chinmay/switchboard/internal/hub"
@@ -40,26 +42,62 @@ var acceptOpts = &websocket.AcceptOptions{
 	OriginPatterns: []string{"localhost:*", "127.0.0.1:*"},
 }
 
-func authorized(r *http.Request, token string) bool {
-	if token == "" {
-		return true
+func SetAllowedOrigins(origins []string) {
+	for _, raw := range origins {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		acceptOpts.OriginPatterns = append(acceptOpts.OriginPatterns, u.Host)
 	}
-	if r.URL.Query().Get("token") == token {
-		return true
-	}
-	return r.Header.Get("X-Supervisor-Token") == token
 }
 
-func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, jobsReg *jobs.Registry, tenants *tenant.Registry, base context.Context) http.HandlerFunc {
+func canSee(account auth.Account, call hub.Call) bool {
+	if account.IsOwner {
+		return true
+	}
+	return call.AccountID == account.ID
+}
+
+func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, jobsReg *jobs.Registry, tenants *tenant.Registry, authStore *auth.Store, limiter *auth.CallLimiter, base context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID := r.URL.Query().Get("tenant")
-		if tenantID == "" {
-			tenantID = "rivera"
+		account, ok := auth.FromContext(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		tenantID := account.TenantID
+		if account.IsOwner {
+			tenantID = r.URL.Query().Get("tenant")
+			if tenantID == "" {
+				tenantID = "rivera"
+			}
 		}
 		t, ok := tenants.Get(tenantID)
 		if !ok {
 			http.Error(w, "unknown tenant", http.StatusNotFound)
 			return
+		}
+		release, ok := limiter.Acquire(account.ID, account.IsOwner)
+		if !ok {
+			http.Error(w, "account already has an active call", http.StatusConflict)
+			return
+		}
+		defer release()
+		if !account.IsOwner {
+			allowed, err := authStore.StartCall(r.Context(), account.ID)
+			if err != nil {
+				http.Error(w, "call quota unavailable", http.StatusInternalServerError)
+				return
+			}
+			if !allowed {
+				http.Error(w, "free call limit reached", http.StatusPaymentRequired)
+				return
+			}
 		}
 
 		c, err := websocket.Accept(w, r, acceptOpts)
@@ -68,15 +106,16 @@ func Handler(h *hub.Hub, st *store.Store, reg *BridgeRegistry, jobsReg *jobs.Reg
 			return
 		}
 		defer c.CloseNow()
-		if err := run(base, c, h, st, reg, jobsReg, t); err != nil {
+		if err := run(base, c, h, st, reg, jobsReg, t, account); err != nil {
 			slog.Error("ws session ended", "err", err)
 		}
 	}
 }
 
-func SupervisorHandler(h *hub.Hub, token string, base context.Context) http.HandlerFunc {
+func SupervisorHandler(h *hub.Hub, base context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !authorized(r, token) {
+		account, ok := auth.FromContext(r.Context())
+		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -95,7 +134,13 @@ func SupervisorHandler(h *hub.Hub, token string, base context.Context) http.Hand
 			case <-base.Done():
 				return
 			case snap := <-ch:
-				b, err := json.Marshal(snap)
+				filtered := make([]hub.Call, 0, len(snap))
+				for _, call := range snap {
+					if canSee(account, call) {
+						filtered = append(filtered, call)
+					}
+				}
+				b, err := json.Marshal(filtered)
 				if err != nil {
 					continue
 				}
@@ -107,13 +152,23 @@ func SupervisorHandler(h *hub.Hub, token string, base context.Context) http.Hand
 	}
 }
 
-func SupervisorCallHandler(reg *BridgeRegistry, h *hub.Hub, token string, base context.Context) http.HandlerFunc {
+func SupervisorCallHandler(reg *BridgeRegistry, h *hub.Hub, base context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !authorized(r, token) {
+		account, ok := auth.FromContext(r.Context())
+		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		id := r.URL.Query().Get("id")
+		call, ok := h.Call(id)
+		if !ok {
+			http.Error(w, "no such call", http.StatusNotFound)
+			return
+		}
+		if !canSee(account, call) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		br, ok := reg.get(id)
 		if !ok {
 			http.Error(w, "no such call", http.StatusNotFound)
@@ -150,18 +205,18 @@ type callMsg struct {
 	pcm     []int16
 }
 
-func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, reg *BridgeRegistry, jobsReg *jobs.Registry, t tenant.Tenant) error {
+func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, reg *BridgeRegistry, jobsReg *jobs.Registry, t tenant.Tenant, account auth.Account) error {
 	c.SetReadLimit(64 * 1024)
 
 	callID := newCallID()
 	ctx, span := obs.Tracer().Start(ctx, "call")
 	defer span.End()
 	span.SetAttributes(attribute.String("call.id", callID), attribute.String("tenant", t.ID))
-	callLog := slog.With("call_id", callID, "tenant", t.ID)
+	callLog := slog.With("call_id", callID, "tenant", t.ID, "account_id", account.ID)
 	callLog.Info("call.start")
 
 	startedAt := time.Now()
-	h.Register(callID, t.ID)
+	h.Register(callID, t.ID, account.ID)
 	metrics.CallStarted()
 	defer h.Unregister(callID)
 
@@ -263,6 +318,7 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 		st.Save(store.Record{
 			ID:         callID,
 			Tenant:     t.ID,
+			AccountID:  account.ID,
 			Lang:       sum.Lang,
 			Turns:      sum.Turns,
 			Escalated:  sum.Escalated,

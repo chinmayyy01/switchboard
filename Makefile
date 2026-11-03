@@ -1,7 +1,7 @@
 PIPER_VOICE ?= $(PWD)/inference/voices/en_US-amy-low.onnx
 KNOWLEDGE_DIR ?= $(PWD)/data/knowledge
 OLLAMA_MODEL ?= qwen3:1.7b
-INFERENCE_URL ?= http://localhost:8100
+INFERENCE_URL ?= http://127.0.0.1:8100
 PY := inference/.venv/bin/python
 UV := inference/.venv/bin/uvicorn
 
@@ -33,7 +33,7 @@ eval:
 	$(PY) inference/eval_rag.py --tenant rivera --k 3 --gate
 
 load:
-	go run ./cmd/loadgen -n 50
+	go run ./cmd/loadgen -n 50 -email "$(LOAD_EMAIL)" -password "$(LOAD_PASSWORD)"
 
 smoke:
 	$(PY) scripts/smoke_sarvam.py

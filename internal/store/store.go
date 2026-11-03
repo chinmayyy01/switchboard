@@ -19,6 +19,7 @@ type Turn struct {
 type Record struct {
 	ID         string          `json:"id"`
 	Tenant     string          `json:"tenant"`
+	AccountID  string          `json:"account_id,omitempty"`
 	Lang       string          `json:"lang"`
 	Turns      int             `json:"turns"`
 	Escalated  bool            `json:"escalated"`
@@ -86,6 +87,21 @@ func (s *Store) List() []Record {
 		}
 	}
 	return out
+}
+
+func (s *Store) Get(id string) (Record, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.byID[id]
+	if !ok {
+		return Record{}, false
+	}
+	rec := *r
+	if l, ok := s.labels[rec.ID]; ok {
+		lb := l
+		rec.Label = &lb
+	}
+	return rec, true
 }
 
 func (s *Store) Labels() map[string]bool {

@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,8 +26,43 @@ func frame(v int16) []byte {
 	return b
 }
 
-func oneCall(ctx context.Context, url string) (int64, error) {
-	c, _, err := websocket.Dial(ctx, url, nil)
+func login(ctx context.Context, api, email, password string) (string, error) {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Jar: jar}
+	body, err := json.Marshal(map[string]string{"email": email, "password": password})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api+"/api/auth/login", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("login status %d", resp.StatusCode)
+	}
+	var parts []string
+	for _, c := range jar.Cookies(req.URL) {
+		parts = append(parts, c.Name+"="+c.Value)
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("login returned no session cookie")
+	}
+	return strings.Join(parts, "; "), nil
+}
+
+func oneCall(ctx context.Context, url, cookie string) (int64, error) {
+	header := http.Header{}
+	header.Set("Cookie", cookie)
+	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		return 0, err
 	}
@@ -73,10 +112,22 @@ func pct(xs []int64, p float64) int64 {
 func main() {
 	n := flag.Int("n", 25, "concurrent callers")
 	url := flag.String("url", "ws://localhost:8090/ws", "caller ws url")
+	api := flag.String("api", "http://localhost:8090", "api url")
+	email := flag.String("email", "", "account email")
+	password := flag.String("password", "", "account password")
 	flag.Parse()
+	if *email == "" || *password == "" {
+		fmt.Fprintln(os.Stderr, "email and password are required")
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	cookie, err := login(ctx, *api, *email, *password)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
 	var wg sync.WaitGroup
 	lats := make([]int64, *n)
@@ -86,7 +137,7 @@ func main() {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			lats[i], errs[i] = oneCall(ctx, *url)
+			lats[i], errs[i] = oneCall(ctx, *url, cookie)
 		}(i)
 	}
 	wg.Wait()

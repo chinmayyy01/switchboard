@@ -1,0 +1,31 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8090
+	}
+
+	handle /ws* {
+		reverse_proxy 127.0.0.1:8090
+	}
+
+	handle /healthz {
+		reverse_proxy 127.0.0.1:8090
+	}
+
+	handle /metrics {
+		reverse_proxy 127.0.0.1:8090
+	}
+
+	handle_path /ai/* {
+		reverse_proxy 127.0.0.1:8100
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

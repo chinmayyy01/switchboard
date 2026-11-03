@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { AuthGate } from "@/components/AuthGate";
+import { SessionProvider } from "@/lib/session";
 
 export const metadata: Metadata = {
   title: "Console | Switchboard",
@@ -7,5 +9,9 @@ export const metadata: Metadata = {
 };
 
 export default function ConsoleLayout({ children }: { children: ReactNode }) {
-  return children;
+  return (
+    <SessionProvider>
+      <AuthGate>{children}</AuthGate>
+    </SessionProvider>
+  );
 }

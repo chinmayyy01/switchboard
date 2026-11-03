@@ -1,0 +1,19 @@
+[Unit]
+Description=Switchboard realtime service
+After=network.target ollama.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=switchboard
+Group=switchboard
+WorkingDirectory=/opt/switchboard
+EnvironmentFile=/opt/switchboard/.env
+ExecStart=/opt/switchboard/bin/switchboard
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

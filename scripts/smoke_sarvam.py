@@ -12,6 +12,7 @@ Run: make smoke
 
 import asyncio
 import base64
+import http.cookiejar
 import io
 import json
 import os
@@ -40,7 +41,10 @@ def env(key, default=""):
 
 
 API_KEY = env("SARVAM_API_KEY")
+API_URL = env("NEXT_PUBLIC_API_URL", "http://localhost:8090")
 WS_URL = env("NEXT_PUBLIC_WS_URL", "ws://localhost:8090/ws")
+EMAIL = env("SMOKE_EMAIL")
+PASSWORD = env("SMOKE_PASSWORD")
 TENANT = env("SMOKE_TENANT", "acme")
 SPEAKER = env("SMOKE_CALLER_SPEAKER", "priya")
 MODEL = env("SARVAM_TTS_MODEL", "bulbul:v3")
@@ -71,6 +75,23 @@ def synth(text):
         if w.getframerate() != 16000:
             raise SystemExit(f"caller TTS rate {w.getframerate()} != 16000")
         return w.readframes(w.getnframes())
+
+
+def login():
+    if not EMAIL or not PASSWORD:
+        raise SystemExit("Set SMOKE_EMAIL and SMOKE_PASSWORD for the owner account")
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    req = urllib.request.Request(
+        f"{API_URL}/api/auth/login",
+        data=json.dumps({"email": EMAIL, "password": PASSWORD}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with opener.open(req, timeout=20) as resp:
+        if resp.status != 200:
+            raise SystemExit(f"login failed: {resp.status}")
+    return "; ".join(f"{c.name}={c.value}" for c in jar)
 
 
 async def send_utterance(ws, pcm):
@@ -151,12 +172,15 @@ async def main():
         "book": "Yes, book it.",
     }
 
+    cookie = login()
     print(f"tenant={TENANT} date={day} caller_voice={SPEAKER}")
     print("synthesizing caller audio...")
     pcm = {k: synth(v) for k, v in caller.items()}
 
     url = f"{WS_URL}?tenant={TENANT}"
-    async with websockets.connect(url, max_size=None) as ws:
+    async with websockets.connect(
+        url, max_size=None, additional_headers={"Cookie": cookie}
+    ) as ws:
         await ws.send(json.dumps({"type": "call.start", "lang": "en"}))
         print("waiting for greeting...")
         try:
