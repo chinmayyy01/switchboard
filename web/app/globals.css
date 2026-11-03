@@ -26,3 +26,13 @@ html {
     scroll-behavior: auto !important;
   }
 }
+
+.console-app [class~="text-[10px]"],
+.console-app [class~="text-[11px]"] {
+  font-size: 12px !important;
+}
+
+.console-app :is(button, a, select, input, textarea):focus-visible {
+  outline: 2px solid #C87941;
+  outline-offset: 2px;
+}

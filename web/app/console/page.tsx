@@ -12,7 +12,6 @@ import { useSupervisor, type Call } from "@/lib/useSupervisor";
 import { useSwitchboard } from "@/lib/useSwitchboard";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
-const AI = process.env.NEXT_PUBLIC_AI_URL ?? "http://127.0.0.1:8100";
 const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
 const api = (p: string) => `${API}${p}`;
 
@@ -45,10 +44,10 @@ type Report = {
 
 const NAV: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
-  { id: "test", label: "Test agent" },
+  { id: "test", label: "Test a call" },
   { id: "live", label: "Live calls" },
-  { id: "calls", label: "Calls" },
-  { id: "evals", label: "Evaluations" },
+  { id: "calls", label: "Call history" },
+  { id: "evals", label: "Agent quality" },
   { id: "team", label: "Team" },
 ];
 
@@ -59,7 +58,6 @@ export default function Page() {
     rttMs,
     transcript,
     agentText,
-    agentState,
     agentLang,
     tool,
     citations,
@@ -84,14 +82,13 @@ export default function Page() {
   const [records, setRecords] = useState<CallRecord[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [expandedId, setExpandedId] = useState("");
+  const [callQuery, setCallQuery] = useState("");
+  const [callFilter, setCallFilter] = useState<"all" | "handled" | "help" | "empty">("all");
+  const [callLimit, setCallLimit] = useState(10);
   const wasInCall = useRef(false);
-  const [engine, setEngine] = useState<{
-    brain?: string;
-    stt?: string;
-    tts?: string;
-    deepgram?: boolean;
-    sarvam?: boolean;
-  }>({});
+  const [assistantStatus, setAssistantStatus] = useState<
+    "checking" | "ready" | "offline"
+  >("checking");
 
   useEffect(() => {
     const load = async () => {
@@ -116,22 +113,12 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    Promise.all([
-      fetch(`${API}/healthz`)
-        .then((r) => r.json())
-        .catch(() => ({})),
-      fetch(`${AI}/health`)
-        .then((r) => r.json())
-        .catch(() => ({})),
-    ]).then(([g, p]) =>
-      setEngine({
-        brain: g.brain,
-        stt: p.stt_provider,
-        tts: p.tts_provider,
-        deepgram: p.deepgram,
-        sarvam: p.sarvam,
-      }),
-    );
+    fetch(`${API}/healthz`)
+      .then((response) => response.json())
+      .then((health) =>
+        setAssistantStatus(health.brain ? "ready" : "offline"),
+      )
+      .catch(() => setAssistantStatus("offline"));
   }, []);
 
   useEffect(() => {
@@ -165,12 +152,19 @@ export default function Page() {
 
   const label = async (id: string, should: boolean) => {
     try {
-      await fetch(api(`/api/calls/${id}/label`), {
+      const response = await fetch(api(`/api/calls/${id}/label`), {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ should_escalate: should }),
       });
+      if (response.ok) {
+        setRecords((current) =>
+          current.map((record) =>
+            record.id === id ? { ...record, label: should } : record,
+          ),
+        );
+      }
     } catch {}
   };
 
@@ -188,59 +182,66 @@ export default function Page() {
   };
 
   const speaking = status.startsWith("agent");
+  const callStatusLabel = !inCall
+    ? "Ready to test"
+    : speaking
+      ? "Receptionist speaking"
+      : status.startsWith("listening") || status === "connected"
+        ? "Listening — speak when ready"
+        : status === "mic error"
+          ? "Microphone unavailable"
+          : status === "call failed"
+            ? "Could not connect"
+            : status === "closed"
+              ? "Call ended"
+              : "Connecting";
   const selected = calls.find((c) => c.id === selectedId);
   const escalatedLive = calls.filter((c) => c.escalated).length;
-  const contained = records.filter((r) => !r.escalated).length;
-  const containment = records.length ? contained / records.length : 0;
+  const completedRecords = records.filter((record) => record.turns > 0);
+  const contained = completedRecords.filter((record) => !record.escalated).length;
+  const containment = completedRecords.length
+    ? contained / completedRecords.length
+    : 0;
   const hasReport = report !== null && report.total > 0;
   const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
-
-  const engineLabel =
-    engine.brain === "llm/sarvam"
-      ? "Sarvam 105B"
-      : engine.brain === "llm/openai"
-        ? "OpenAI"
-        : engine.brain === "hybrid/ollama"
-          ? "Hybrid (Ollama)"
-          : engine.brain === "llm/ollama"
-            ? "Ollama"
-            : engine.brain === "rules"
-              ? "Rules"
-              : "—";
-  const sttLabel =
-    engine.stt === "sarvam" && engine.sarvam
-      ? "Sarvam Saaras"
-      : engine.stt === "deepgram" && engine.deepgram
-        ? "Deepgram"
-        : engine.stt === "local"
-          ? "Local Whisper"
-          : "—";
-  const ttsLabel =
-    engine.tts === "sarvam" && engine.sarvam
-      ? "Sarvam Bulbul"
-      : engine.tts === "piper"
-        ? "Piper"
-        : "—";
+  const filteredRecords = records.filter((record) => {
+    const outcomeMatches =
+      callFilter === "all" ||
+      (callFilter === "help" && record.escalated) ||
+      (callFilter === "handled" && !record.escalated && record.turns > 0) ||
+      (callFilter === "empty" && !record.escalated && record.turns === 0);
+    const searchText = [
+      callSummary(record),
+      record.reason,
+      ...(record.transcript ?? []).map((turn) => turn.text),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return outcomeMatches && searchText.includes(callQuery.trim().toLowerCase());
+  });
+  const visibleRecords = filteredRecords.slice(0, callLimit);
 
   return (
-    <div className="min-h-screen bg-[#111111] lg:flex">
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-[#3A3A3A] bg-[#242424] lg:sticky lg:top-0 lg:flex lg:h-screen lg:overflow-y-auto">
+    <div className="console-app min-h-screen bg-[#111111] lg:flex">
+      <aside className="console-sidebar hidden w-64 shrink-0 flex-col border-r border-[#3A3A3A] bg-[#242424] lg:sticky lg:top-0 lg:flex lg:h-screen lg:overflow-y-auto">
         <Link href="/" className="flex items-center gap-2.5 px-5 py-5">
           <Logo />
           <div>
             <div className="text-sm font-semibold tracking-tight text-[#EAE5DC]">
               Switchboard
             </div>
-            <div className="text-[11px] text-[#8A8379]">voice agent console</div>
+            <div className="text-xs text-[#A8A092]">AI receptionist</div>
           </div>
         </Link>
 
-        <nav className="flex-1 space-y-1 px-3">
+        <nav aria-label="Main navigation" className="flex-1 space-y-1 px-3">
           {NAV.map((item) => (
             <button
               key={item.id}
+              type="button"
+              aria-current={tab === item.id ? "page" : undefined}
               onClick={() => setTab(item.id)}
-              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              className={`flex min-h-10 w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                 tab === item.id
                   ? "bg-[#C87941] text-[#111111]"
                   : "text-[#B5AEA3] hover:bg-[#2A2A2A] hover:text-[#EAE5DC]"
@@ -262,42 +263,31 @@ export default function Page() {
           ))}
         </nav>
 
-        <div className="space-y-1 border-t border-[#2E2E2E] p-4">
+        <div className="space-y-2 border-t border-[#2E2E2E] p-4">
+          <div className="px-1 text-xs font-medium text-[#A8A092]">System status</div>
           <StatusRow
-            label="Engine"
-            value={engineLabel}
-            tone={
-              engine.brain === "llm/sarvam" ||
-              engine.brain === "llm/openai" ||
-              engine.brain === "hybrid/ollama"
-                ? "emerald"
-                : engine.brain === "rules"
-                  ? "amber"
-                  : "slate"
+            label="Assistant"
+            value={
+              assistantStatus === "ready"
+                ? "Ready"
+                : assistantStatus === "checking"
+                  ? "Checking…"
+                  : "Unavailable"
             }
+            tone={assistantStatus === "ready" ? "emerald" : assistantStatus === "offline" ? "rose" : "slate"}
           />
           <StatusRow
-            label="Speech in"
-            value={sttLabel}
-            tone={sttLabel === "Deepgram" || sttLabel === "Sarvam Saaras" ? "emerald" : "amber"}
-          />
-          <StatusRow
-            label="Voice"
-            value={ttsLabel}
-            tone={ttsLabel === "Sarvam Bulbul" ? "emerald" : "slate"}
-          />
-          <StatusRow
-            label="Supervisor"
-            value={connected ? "live" : "offline"}
-            tone={connected ? "emerald" : "rose"}
+            label="Phone line"
+            value="Not connected"
+            tone="amber"
           />
           <div className="mt-3 border-t border-[#2E2E2E] pt-3">
             <div className="truncate px-1 text-[11px] text-[#B5AEA3]">
-              {authDisabled ? "Local preview" : account?.email}
+              {authDisabled ? "Preview workspace" : account?.email}
             </div>
-            <div className="px-1 text-[10px] text-[#8A8379]">
+            <div className="px-1 text-[10px] text-[#A8A092]">
               {authDisabled
-                ? "Auth disabled"
+                ? "Unlimited test calls"
                 : account?.is_owner
                   ? "Owner · unlimited calls"
                   : `Free calls: ${remaining}/${account?.free_call_limit ?? 0}`}
@@ -305,7 +295,7 @@ export default function Page() {
             {!authDisabled && (
               <button
                 onClick={() => logout()}
-                className="mt-2 w-full rounded-lg px-1 py-1.5 text-left text-xs font-medium text-[#8A8379] transition-colors hover:text-[#D8D2C7]"
+                className="mt-2 w-full rounded-lg px-1 py-1.5 text-left text-xs font-medium text-[#A8A092] transition-colors hover:text-[#D8D2C7]"
               >
                 Sign out
               </button>
@@ -313,25 +303,29 @@ export default function Page() {
           </div>
           <Link
             href="/"
-            className="mt-1 block rounded-lg px-1 py-2 text-xs font-medium text-[#8A8379] transition-colors hover:text-[#D8D2C7]"
+            className="mt-1 block rounded-lg px-1 py-2 text-xs font-medium text-[#A8A092] transition-colors hover:text-[#D8D2C7]"
           >
             Back to site
           </Link>
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1">
+      <div className="console-sheet min-w-0 flex-1">
         <div className="border-b border-[#3A3A3A] bg-[#242424] lg:hidden">
           <div className="flex items-center justify-between px-4 py-3">
             <Link href="/" className="flex items-center gap-2.5">
               <Logo />
-              <span className="text-sm font-semibold tracking-tight text-[#EAE5DC]">
-                Switchboard
-              </span>
-            </Link>
+                <span className="text-sm font-semibold tracking-tight text-[#EAE5DC]">
+                  Switchboard
+                </span>
+              </Link>
             <div className="flex items-center gap-3">
-              <Badge tone={connected ? "emerald" : "slate"}>
-                {connected ? "supervisor live" : "supervisor offline"}
+              <Badge tone={assistantStatus === "ready" ? "emerald" : assistantStatus === "offline" ? "rose" : "amber"}>
+                {assistantStatus === "ready"
+                  ? "Assistant ready"
+                  : assistantStatus === "checking"
+                    ? "Checking assistant"
+                    : "Assistant unavailable"}
               </Badge>
               {!authDisabled && (
                 <button
@@ -343,40 +337,44 @@ export default function Page() {
               )}
             </div>
           </div>
-          <div className="flex gap-1 overflow-x-auto px-3 pb-2">
+          <nav aria-label="Main navigation" className="grid grid-cols-3 gap-1 px-3 pb-3">
             {NAV.map((item) => (
               <button
                 key={item.id}
+                type="button"
+                aria-current={tab === item.id ? "page" : undefined}
                 onClick={() => setTab(item.id)}
-                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`min-h-10 rounded-lg px-2 py-2 text-xs font-medium transition-colors ${
                   tab === item.id
                     ? "bg-[#C87941] text-[#111111]"
-                    : "text-[#B5AEA3] hover:bg-[#2A2A2A]"
+                    : "text-[#B5AEA3] hover:bg-[#2A2A2A] hover:text-[#EAE5DC]"
                 }`}
               >
                 {item.label}
               </button>
             ))}
-          </div>
+          </nav>
         </div>
 
-        <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:py-8">
+        <main className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           <div
-            className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
-              unlimited
-                ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
-                : outOfCalls
-                  ? "border-rose-400/20 bg-rose-500/10 text-rose-300"
-                  : "border-[#C87941]/25 bg-[#C87941]/10 text-[#E8C3A4]"
+            className={`mb-5 rounded-lg border px-4 py-3 text-sm leading-relaxed ${
+              authDisabled
+                ? "border-[#C87941]/25 bg-[#C87941]/10 text-[#E8C3A4]"
+                : unlimited
+                  ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
+                  : outOfCalls
+                    ? "border-rose-400/20 bg-rose-500/10 text-rose-300"
+                    : "border-[#C87941]/25 bg-[#C87941]/10 text-[#E8C3A4]"
             }`}
           >
             {authDisabled
-              ? "Local preview · auth is disabled · unlimited calls."
+              ? "Preview workspace · You can test calls in your browser."
               : unlimited
-                ? "Owner account · unlimited calls."
+                ? "Owner workspace · No call limit."
                 : outOfCalls
-                  ? "You have used both free calls. Ask the owner for more access."
-                  : `${remaining} of ${account?.free_call_limit ?? 0} free calls left.`}
+                  ? "You have used both trial calls. Contact the workspace owner to continue."
+                  : `${remaining} trial calls remaining.`}
           </div>
           {tab === "overview" && (
             <Overview
@@ -401,11 +399,11 @@ export default function Page() {
             <div>
               <PageHeading
                 badge="Browser test call"
-                title="Test the agent"
-                subtitle="Talk to it like a customer. Interrupt it. Then check how it scored."
+                title="Try your receptionist"
+                subtitle="Speak naturally, ask a question, or try booking a visit. You can interrupt at any time."
               />
 
-              <div className="grid gap-6 lg:grid-cols-2">
+              <div className="grid items-start gap-6 lg:grid-cols-2">
                 <Card className="p-6">
                   <div className="flex items-start justify-between gap-4">
                     <div>
@@ -413,15 +411,19 @@ export default function Page() {
                         Start a call
                       </h2>
                       <p className="text-sm text-[#A8A092]">
-                        Choose a business, then talk.
+                        {account?.is_owner && !authDisabled
+                          ? "Choose a business and language, then talk."
+                          : "Choose a language, then try a few common requests."}
                       </p>
                     </div>
                     <span
                       className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${
                         inCall
                           ? speaking
-                            ? "bg-amber-500/10 text-amber-300"
-                            : "bg-emerald-500/10 text-emerald-300"
+                          ? "bg-amber-500/10 text-amber-300"
+                            : status === "mic error" || status === "call failed"
+                              ? "bg-rose-500/10 text-rose-300"
+                              : "bg-emerald-500/10 text-emerald-300"
                           : "bg-[#2E2E2E] text-[#A8A092]"
                       }`}
                     >
@@ -430,27 +432,29 @@ export default function Page() {
                           inCall ? "animate-pulse bg-current" : "bg-[#6E675D]"
                         }`}
                       />
-                      {inCall ? status : "idle"}
+                      {callStatusLabel}
                     </span>
                   </div>
 
                   <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-medium text-[#A8A092]">
-                        Business
-                      </span>
-                      <select
-                        value={activeTenant}
-                        onChange={(e) => setTenant(e.target.value)}
-                        disabled={inCall || !account?.is_owner}
-                        className="w-full rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30 disabled:opacity-50"
-                      >
-                        <option value="rivera">Rivera Plumbing</option>
-                        <option value="acme">Acme Home</option>
-                      </select>
-                    </label>
+                    {account?.is_owner && !authDisabled && (
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-[#A8A092]">
+                          Business
+                        </span>
+                        <select
+                          value={activeTenant}
+                          onChange={(e) => setTenant(e.target.value)}
+                          disabled={inCall}
+                          className="w-full rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30 disabled:opacity-50"
+                        >
+                          <option value="rivera">Rivera Plumbing &amp; HVAC</option>
+                          <option value="acme">Acme Home Services</option>
+                        </select>
+                      </label>
+                    )}
 
-                    <label className="block">
+                    <label className={`block ${account?.is_owner && !authDisabled ? "" : "sm:col-span-2"}`}>
                       <span className="mb-1 block text-xs font-medium text-[#A8A092]">
                         Language
                       </span>
@@ -493,6 +497,9 @@ export default function Page() {
                         </option>
                       ))}
                     </select>
+                    <p className="mt-1 text-xs text-[#A8A092]">
+                      Your browser may ask for microphone access when the call starts.
+                    </p>
                   </div>
 
                   <button
@@ -507,22 +514,28 @@ export default function Page() {
                     {inCall
                       ? "End call"
                       : outOfCalls
-                        ? "No free calls left"
-                        : "Start call"}
+                        ? "No trial calls left"
+                        : "Start browser call"}
                   </button>
                   <p
                     className={`mt-2 text-center text-xs ${
-                      outOfCalls ? "text-rose-300" : "text-[#8A8379]"
+                      outOfCalls ? "text-rose-300" : "text-[#A8A092]"
                     }`}
                   >
-                    {unlimited
-                      ? "Owner account · unlimited calls."
+                    {authDisabled
+                      ? "Unlimited browser test calls in this preview."
+                      : unlimited
+                        ? "Owner workspace · no call limit."
                       : outOfCalls
                         ? "You have used both free calls."
                         : `${remaining} of ${account?.free_call_limit ?? 0} free calls left.`}
                   </p>
 
-                  <div className="mt-4 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+                  <details className="mt-4 rounded-xl border border-[#3A3A3A] bg-[#2A2A2A] px-4 py-3">
+                    <summary className="cursor-pointer text-sm font-medium text-[#D8D2C7]">
+                      Connection details (optional)
+                    </summary>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                     <MiniStat
                       label="RTT"
                       value={rttMs === null ? "—" : `${rttMs.toFixed(0)} ms`}
@@ -543,10 +556,10 @@ export default function Page() {
                       label="Turn"
                       value={latency ? `${latency.turn} ms` : "—"}
                     />
-                  </div>
+                    </div>
 
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-[#8A8379]">
+                    <div className="mt-3">
+                    <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-[#A8A092]">
                       <span>mic level</span>
                       <span>
                         {sampleRate
@@ -562,24 +575,29 @@ export default function Page() {
                         }}
                       />
                     </div>
-                  </div>
+                    </div>
+                  </details>
 
                   <div className="mt-5 border-t border-[#2E2E2E] pt-4">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-[#8A8379]">
-                      Try saying
+                    <div className="text-sm font-medium text-[#D8D2C7]">
+                      Try asking
                     </div>
+                    <p className="mt-1 text-xs text-[#A8A092]">Choose an example or say it out loud.</p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {[
                         "My kitchen sink is leaking",
                         "What is your call-out fee?",
                         "I need to reschedule Friday",
                       ].map((line) => (
-                        <span
+                        <button
                           key={line}
-                          className="rounded-full bg-[#2E2E2E] px-2.5 py-1 text-xs text-[#B5AEA3] ring-1 ring-[#EAE5DC]/5"
+                          type="button"
+                          disabled={!inCall}
+                          onClick={() => sendText(line)}
+                          className="min-h-9 rounded-lg bg-[#2E2E2E] px-3 py-2 text-xs text-[#B5AEA3] transition-colors hover:bg-[#3A3A3A] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {line}
-                        </span>
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -595,8 +613,7 @@ export default function Page() {
                         Conversation
                       </h2>
                       <div className="flex flex-wrap gap-2">
-                        {agentLang && <Badge tone="indigo">{agentLang}</Badge>}
-                        {agentState && <Badge>{agentState}</Badge>}
+                        {agentLang && <Badge tone="indigo">{languageName(agentLang)}</Badge>}
                       </div>
                     </div>
 
@@ -607,7 +624,7 @@ export default function Page() {
 
                     {(tool || citations.length > 0) && (
                       <div className="mt-4 flex flex-wrap gap-2 border-t border-[#2E2E2E] pt-4">
-                        {tool && <Badge>tool · {tool}</Badge>}
+                        {tool && <Badge>{toolLabel(tool)}</Badge>}
                         {citations.map((c) => (
                           <Badge key={c} tone="emerald">
                             source · {c}
@@ -619,28 +636,15 @@ export default function Page() {
 
                   <Card className="p-6">
                     <h2 className="text-base font-semibold tracking-tight text-[#EAE5DC]">
-                      What happens under the hood
+                      Before you start
                     </h2>
-                    <ol className="mt-4 space-y-4">
-                      <Step
-                        n="1"
-                        title="It listens"
-                        text="Your voice streams as 16 kHz PCM; server-side VAD finds when you finish."
-                      />
-                      <Step
-                        n="2"
-                        title="It decides"
-                        text="An LLM with tools books, reschedules, or looks up policy — code validates every action."
-                      />
-                      <Step
-                        n="3"
-                        title="It speaks"
-                        text="Piper streams the reply back; you can talk over it to interrupt."
-                      />
-                    </ol>
-                    <p className="mt-5 rounded-xl bg-[#2A2A2A] p-4 text-xs leading-relaxed text-[#A8A092]">
-                      Every test call lands in Calls with a transcript. Label it
-                      there and it feeds the escalation metrics.
+                    <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-[#A8A092]">
+                      <li>Allow microphone access when your browser asks.</li>
+                      <li>Use headphones to avoid echo. You can interrupt the receptionist at any time.</li>
+                      <li>Call transcripts are saved in Call history. Audio is not recorded in this preview.</li>
+                    </ul>
+                    <p className="mt-4 rounded-xl bg-[#2A2A2A] p-4 text-xs leading-relaxed text-[#A8A092]">
+                      For a quick start, choose an example prompt above after the call connects.
                     </p>
                   </Card>
                 </div>
@@ -653,10 +657,10 @@ export default function Page() {
               <PageHeading
                 badge="Warm transfer"
                 title="Live calls"
-                subtitle="Watch the floor, then step in with the full transcript."
+                subtitle="Join a live conversation when the receptionist asks your team for help."
                 action={
                   <Badge tone={connected ? "emerald" : "rose"}>
-                    {connected ? "connected" : "disconnected"}
+                    {connected ? "Ready to join" : "Reconnecting…"}
                   </Badge>
                 }
               />
@@ -669,33 +673,29 @@ export default function Page() {
                         <span className="text-sm font-semibold text-[#EAE5DC]">
                           You are on call
                         </span>
-                        <span className="font-mono text-xs text-[#A8A092]">
-                          {selectedId}
-                        </span>
                         <Badge
                           tone={
                             bridgeStatus === "connected" ? "emerald" : "amber"
                           }
                         >
-                          bridge · {bridgeStatus}
+                          {bridgeStatus === "connected" ? "Audio connected" : "Connecting audio"}
                         </Badge>
                       </div>
                       <p className="mt-1 text-sm text-[#A8A092]">
-                        The agent is paused. The caller hears you directly — use
-                        headphones.
+                      The receptionist is paused. The caller can hear you now. Use headphones to avoid echo.
                       </p>
                     </div>
                     <button
                       onClick={() => setSelectedId("")}
                       className="rounded-xl bg-[#2E2E2E] px-4 py-2 text-xs font-semibold text-[#EAE5DC] transition-colors hover:bg-[#3A3A3A]"
                     >
-                      Release call
+                      Leave call
                     </button>
                   </div>
 
                   {selected?.reason && (
                     <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-                      <span className="font-medium">Why escalated: </span>
+                      <span className="font-medium">Reason for handoff: </span>
                       {selected.reason}
                     </div>
                   )}
@@ -737,8 +737,7 @@ export default function Page() {
                 ))}
                 {calls.length === 0 && (
                   <Empty>
-                    No active calls. Start one from Test agent and it appears
-                    here.
+                    No callers are waiting. Calls that need your help will appear here.
                   </Empty>
                 )}
               </div>
@@ -749,57 +748,100 @@ export default function Page() {
             <div>
               <PageHeading
                 badge={`${records.length} recorded`}
-                title="Calls"
-                subtitle="Every call keeps its transcript, outcome, and your label."
+                title="Call history"
+                subtitle="Review previous conversations and see how each one ended."
                 onGoTest={() => setTab("test")}
               />
 
-              <div className="grid gap-6 lg:grid-cols-[1.3fr_0.7fr]">
-                <Card className="divide-y divide-[#2E2E2E]">
-                  {records.map((record) => (
-                    <RecordRow
-                      key={record.id}
-                      record={record}
-                      expanded={expandedId === record.id}
-                      onToggle={() =>
-                        setExpandedId(expandedId === record.id ? "" : record.id)
-                      }
-                      onLabel={(value) => label(record.id, value)}
-                    />
-                  ))}
-                  {records.length === 0 && (
-                    <div className="p-4">
-                      <Empty>No calls yet. Start one from Test agent.</Empty>
-                    </div>
+              <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,0.8fr)]">
+                <div className="min-w-0 space-y-3">
+                  <div className="flex min-w-0 flex-col gap-3 sm:flex-row">
+                    <label className="min-w-0 flex-1">
+                      <span className="sr-only">Search calls</span>
+                      <input
+                        type="search"
+                        value={callQuery}
+                        onChange={(event) => {
+                          setCallQuery(event.target.value);
+                          setCallLimit(10);
+                        }}
+                        placeholder="Search calls or transcripts"
+                        className="min-h-11 w-full rounded-lg border border-[#3A3A3A] bg-[#242424] px-3 py-2 text-sm text-[#EAE5DC] placeholder:text-[#A8A092] focus:border-[#C87941] focus:outline-none"
+                      />
+                    </label>
+                    <label className="sm:w-56">
+                      <span className="sr-only">Filter calls by outcome</span>
+                      <select
+                        value={callFilter}
+                        onChange={(event) => {
+                          setCallFilter(event.target.value as typeof callFilter);
+                          setCallLimit(10);
+                        }}
+                        className="min-h-11 w-full rounded-lg border border-[#3A3A3A] bg-[#242424] px-3 py-2 text-sm text-[#EAE5DC] focus:border-[#C87941] focus:outline-none"
+                      >
+                        <option value="all">All calls</option>
+                        <option value="handled">Handled by receptionist</option>
+                        <option value="help">Team help requested</option>
+                        <option value="empty">No details captured</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p className="text-xs text-[#A8A092]">
+                    {filteredRecords.length} {filteredRecords.length === 1 ? "call" : "calls"}
+                  </p>
+                  <Card className="min-w-0 divide-y divide-[#2E2E2E]">
+                    {visibleRecords.map((record) => (
+                      <RecordRow
+                        key={record.id}
+                        record={record}
+                        expanded={expandedId === record.id}
+                        onToggle={() =>
+                          setExpandedId(expandedId === record.id ? "" : record.id)
+                        }
+                        onLabel={(value) => label(record.id, value)}
+                      />
+                    ))}
+                    {filteredRecords.length === 0 && (
+                      <div className="p-4">
+                        <Empty>
+                          {records.length === 0
+                            ? "Your conversations will appear here after they end."
+                            : "No calls match those search and filter choices."}
+                        </Empty>
+                      </div>
+                    )}
+                  </Card>
+                  {visibleRecords.length < filteredRecords.length && (
+                    <button
+                      type="button"
+                      onClick={() => setCallLimit((limit) => limit + 10)}
+                      className="min-h-10 w-full rounded-lg border border-[#3A3A3A] bg-[#242424] px-4 py-2 text-sm font-medium text-[#D8D2C7] hover:bg-[#2A2A2A]"
+                    >
+                      Show {Math.min(10, filteredRecords.length - visibleRecords.length)} older calls
+                    </button>
                   )}
-                </Card>
+                </div>
 
                 <div className="space-y-4">
                   <Card className="p-5">
                     <h3 className="text-sm font-semibold text-[#EAE5DC]">
-                      Scoring calls
+                      Review call handling
                     </h3>
                     <p className="mt-1 text-sm leading-relaxed text-[#A8A092]">
-                      Mark whether a human was actually needed. Those labels are
-                      the ground truth for precision and recall — not the
-                      agent&apos;s own opinion.
+                      Tell us whether a teammate should have joined the call. Your feedback helps improve when the receptionist asks for help.
                     </p>
                   </Card>
 
                   {hasReport && (
                     <Card className="p-5">
                       <h3 className="text-sm font-semibold text-[#EAE5DC]">
-                        Current report
+                        Call handling summary
                       </h3>
-                      <dl className="mt-3 space-y-2 text-sm">
-                        <Row label="Labelled calls" value={String(report!.total)} />
-                        <Row label="Precision" value={pct(report!.precision)} />
-                        <Row label="Recall" value={pct(report!.recall)} />
-                        <Row label="F1" value={pct(report!.f1)} />
-                        <Row
-                          label="Containment"
-                          value={pct(report!.containment)}
-                        />
+                        <dl className="mt-3 space-y-2 text-sm">
+                        <Row label="Calls reviewed" value={String(report!.total)} />
+                        <Row label="Correct team requests" value={pct(report!.precision)} />
+                        <Row label="Missed requests for help" value={String(report!.fn)} />
+                        <Row label="Handled without a teammate" value={pct(report!.containment)} />
                       </dl>
                     </Card>
                   )}
@@ -811,120 +853,124 @@ export default function Page() {
           {tab === "evals" && (
             <div>
               <PageHeading
-                badge="Measured, not vibes"
-                title="Evaluations"
-                subtitle="Escalation quality, containment, booking completion, and grounding."
+                badge="Agent quality"
+                title="Agent quality"
+                subtitle="See how often the receptionist handles calls and asks your team for help at the right time."
               />
 
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Stat
-                  label="Precision"
+                  label="Correct team requests"
                   value={hasReport ? pct(report!.precision) : "—"}
                   hint={
                     hasReport
-                      ? `${report!.tp} of ${report!.tp + report!.fp} raised`
-                      : "label calls"
+                      ? `${report!.tp} correct out of ${report!.tp + report!.fp} requests`
+                      : "Review calls to measure"
                   }
                 />
                 <Stat
-                  label="Recall"
+                  label="Missed requests for help"
                   value={hasReport ? pct(report!.recall) : "—"}
                   hint={
-                    hasReport ? `missed ${report!.fn}` : "label calls"
+                    hasReport ? `${report!.fn} calls` : "Review calls to measure"
                   }
                 />
                 <Stat
-                  label="Containment"
-                  value={records.length ? pct(containment) : "—"}
-                  hint={`${contained} of ${records.length} calls`}
+                  label="Handled without a teammate"
+                  value={completedRecords.length ? pct(containment) : "—"}
+                  hint={`${contained} of ${completedRecords.length} completed calls`}
                 />
                 <Stat
-                  label="Recorded"
-                  value={String(records.length)}
-                  hint="with transcripts"
+                  label="Calls reviewed"
+                  value={String(report?.total ?? 0)}
+                  hint="Add feedback in Call history"
                 />
               </div>
 
               <div className="mt-6 grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
                 <Card className="p-5">
                   <h3 className="text-sm font-semibold text-[#EAE5DC]">
-                    Escalation confusion matrix
+                    Team handoff decisions
                   </h3>
                   <p className="mt-1 text-xs text-[#8A8379]">
-                    Based on your labels in Calls.
+                    The receptionist&apos;s choice compared with your review.
                   </p>
                   <div className="mt-4 grid grid-cols-[auto_1fr_1fr] gap-1 text-center text-xs">
                     <div />
                     <div className="pb-1 font-medium text-[#8A8379]">
-                      needed human
+                      Teammate needed
                     </div>
                     <div className="pb-1 font-medium text-[#8A8379]">
-                      should contain
+                      Receptionist could handle
                     </div>
                     <div className="pr-2 text-right font-medium text-[#8A8379]">
-                      raised
+                      Asked for help
                     </div>
                     <MatrixCell
                       value={report?.tp ?? 0}
                       tone="emerald"
-                      hint="correct"
+                      hint="right call"
                     />
                     <MatrixCell
                       value={report?.fp ?? 0}
                       tone="rose"
-                      hint="false alarm"
+                      hint="asked unnecessarily"
                     />
                     <div className="pr-2 text-right font-medium text-[#8A8379]">
-                      held
+                      Kept the call
                     </div>
                     <MatrixCell
                       value={report?.fn ?? 0}
                       tone="amber"
-                      hint="missed"
+                      hint="missed help"
                     />
                     <MatrixCell
                       value={report?.tn ?? 0}
                       tone="emerald"
-                      hint="correct"
+                      hint="right call"
                     />
                   </div>
                   {!hasReport && (
                     <p className="mt-4 text-xs text-[#8A8379]">
-                      Label a few calls to populate this.
+                      Review a few calls in Call history to see these results.
                     </p>
                   )}
                 </Card>
 
                 <Card className="p-5">
                   <h3 className="text-sm font-semibold text-[#EAE5DC]">
-                    What gets measured
+                    What we track
                   </h3>
                   <ul className="mt-3 space-y-3 text-sm">
                     <Measure
-                      title="Escalation precision / recall"
-                      text="From your labels. Catches both false alarms and missed handoffs."
+                      title="The right time to ask your team for help"
+                      text="Your feedback shows if the receptionist asked unnecessarily or missed a call that needed a person."
                     />
                     <Measure
-                      title="Containment"
-                      text="Calls closed without a human, the number the business cares about."
+                      title="Calls handled without a teammate"
+                      text="The share of completed conversations the receptionist resolved on its own."
                     />
                     <Measure
-                      title="Booking completion"
-                      text="Scripted book / cancel / reschedule / emergency scenarios."
+                      title="Successful visit changes"
+                      text="Checks that booking, rescheduling, and cancellation work as expected."
                     />
                     <Measure
-                      title="Grounding and refusal"
-                      text="Recall, MRR, grounded answers, and abstention on unanswerable policy questions."
+                      title="Accurate business answers"
+                      text="Checks that policy answers come from your business information and that the receptionist says when it does not know."
                     />
                     <Measure
-                      title="Latency per stage"
-                      text="STT, brain, and TTS timings on every turn, plus p95."
+                      title="Response time"
+                      text="Measures how quickly the receptionist listens, responds, and speaks."
                     />
                   </ul>
-                  <p className="mt-4 rounded-xl bg-[#2A2A2A] p-3 text-xs text-[#A8A092]">
-                    Curated suites: run <code className="font-mono">make eval</code>{" "}
-                    for booking, escalation, and RAG scores.
-                  </p>
+                  <details className="mt-4 rounded-xl bg-[#2A2A2A] p-3 text-xs text-[#A8A092]">
+                    <summary className="cursor-pointer font-medium text-[#D8D2C7]">
+                      Technical evaluation details
+                    </summary>
+                    <p className="mt-2 leading-relaxed">
+                      The development team can run the booking, handoff, and answer-quality test suites with <code className="font-mono">make eval</code>.
+                    </p>
+                  </details>
                 </Card>
               </div>
             </div>
@@ -932,7 +978,7 @@ export default function Page() {
           {tab === "team" && (
             <TeamTab
               tenant={activeTenant}
-              isOwner={!!account?.is_owner}
+              canSwitchTenant={!!account?.is_owner && !authDisabled}
               onTenantChange={setTenant}
             />
           )}
@@ -978,7 +1024,7 @@ function StatusRow({
           : "bg-[#6E675D]";
   return (
     <div className="flex items-center justify-between px-1 py-1 text-xs">
-      <span className="text-[#8A8379]">{label}</span>
+      <span className="text-[#A8A092]">{label}</span>
       <span className="inline-flex items-center gap-1.5 font-medium text-[#D8D2C7]">
         <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
         {value}
@@ -1003,8 +1049,7 @@ function PageHeading({
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
-        <Badge tone="indigo">{badge}</Badge>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#EAE5DC]">
+        <h1 className="text-2xl font-semibold tracking-tight text-[#EAE5DC]">
           {title}
         </h1>
         <p className="mt-1 text-sm text-[#A8A092]">{subtitle}</p>
@@ -1015,7 +1060,7 @@ function PageHeading({
             onClick={onGoTest}
             className="rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2 text-xs font-semibold text-[#D8D2C7] transition-colors hover:bg-[#2A2A2A]"
           >
-            Test agent
+            Try a call
           </button>
         )}
         {action}
@@ -1043,121 +1088,86 @@ function Overview({
   onGoCalls: () => void;
   onStartTest: () => void;
 }) {
-  const hasReport = report !== null && report.total > 0;
   const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
   const recent = records.slice(0, 5);
+  const completed = records.filter((record) => record.turns > 0);
+  const needsHelp = calls.filter((call) => call.escalated).slice(0, 4);
 
   return (
-    <div>
+    <div className="space-y-7">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <Badge tone="indigo">Voice agent console</Badge>
-          <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#EAE5DC]">
-            Every call answered. Every job booked.
+          <h1 className="text-2xl font-semibold tracking-tight text-[#EAE5DC]">
+            Overview
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-[#A8A092]">
-            A working voice receptionist: it talks, books with real tools,
-            answers from policy, and hands off to a human when it matters.
+            See what your receptionist handled and where your team may need to step in.
           </p>
         </div>
         <button
+          type="button"
           onClick={onStartTest}
-          className="rounded-xl bg-[#C87941] px-4 py-2.5 text-sm font-semibold text-[#111111] transition-colors hover:bg-[#D98E5A]"
+          className="min-h-11 rounded-lg bg-[#C87941] px-4 py-2.5 text-sm font-semibold text-[#111111] transition-colors hover:bg-[#D98E5A] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C87941]"
         >
-          Start a test call
+          Try a test call
         </button>
       </div>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <section aria-label="Call summary" className="grid gap-3 sm:grid-cols-3">
         <Stat
-          label="Live calls"
+          label="Calls in history"
+          value={String(records.length)}
+          hint="All saved calls"
+        />
+        <Stat
+          label="Handled by receptionist"
+          value={completed.length ? pct(containment) : "—"}
+          hint={
+            completed.length
+              ? `Across ${completed.length} completed calls`
+              : "No completed calls yet"
+          }
+        />
+        <Stat
+          label="Callers waiting now"
           value={String(calls.length)}
-          hint={calls.length ? `${escalatedLive} escalated` : "idle"}
+          hint={escalatedLive ? `${escalatedLive} need your help` : "No one waiting"}
         />
-        <Stat
-          label="Escalated"
-          value={String(escalatedLive)}
-          hint="needs a human"
-        />
-        <Stat
-          label="Containment"
-          value={records.length ? pct(containment) : "—"}
-          hint={`${records.length} calls`}
-        />
-        <Stat
-          label="Precision"
-          value={hasReport ? pct(report!.precision) : "—"}
-          hint={hasReport ? `${report!.total} labelled` : "label calls"}
-        />
-        <Stat
-          label="Recall"
-          value={hasReport ? pct(report!.recall) : "—"}
-          hint={hasReport ? `missed ${report!.fn}` : "label calls"}
-        />
-      </div>
-
-      <section className="mt-8">
-        <SectionHeading
-          title="Capabilities"
-          subtitle="What this agent can actually do today"
-        />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {[
-            [
-              "Natural conversation",
-              "LLM + tool calling, one question at a time, no scripted tree.",
-            ],
-            [
-              "Real bookings",
-              "Checks availability, books, reschedules, and cancels against a job store.",
-            ],
-            [
-              "Grounded policy",
-              "Answers from tenant docs with citations, and refuses when unsure.",
-            ],
-            [
-              "Warm transfer",
-              "Supervisor hears the transcript and joins the live audio bridge.",
-            ],
-            [
-              "Multilingual",
-              "Auto-detects the caller and replies in the same language.",
-            ],
-            [
-              "Guardrails",
-              "Injection blocking, PII redaction, price checks, tenant isolation.",
-            ],
-          ].map(([title, text], i) => (
-            <Card key={title} className="p-4">
-              <div className="flex items-start gap-3">
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#C87941]/10 text-[11px] font-semibold text-[#D98E5A]">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <div>
-                  <div className="text-sm font-medium text-[#EAE5DC]">
-                    {title}
-                  </div>
-                  <p className="mt-0.5 text-xs leading-relaxed text-[#A8A092]">
-                    {text}
-                  </p>
-                </div>
-              </div>
-            </Card>
-          ))}
-        </div>
       </section>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+      <section aria-labelledby="phone-line-heading" className="rounded-xl border border-[#C87941]/25 bg-[#C87941]/10 p-4 sm:flex sm:items-center sm:justify-between sm:gap-6">
+        <div className="flex items-start gap-3">
+          <span aria-hidden="true" className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" />
+          <div>
+            <h2 id="phone-line-heading" className="text-sm font-semibold text-[#EAE5DC]">
+              Your business phone is not connected
+            </h2>
+            <p className="mt-1 text-sm leading-relaxed text-[#A8A092]">
+              This preview only supports browser calls, so customers cannot call your receptionist yet.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onStartTest}
+          className="mt-3 min-h-10 shrink-0 rounded-lg border border-[#3A3A3A] bg-[#2E2E2E] px-3 py-2 text-sm font-medium text-[#EAE5DC] transition-colors hover:bg-[#3A3A3A] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C87941] sm:mt-0"
+        >
+          Test the receptionist
+        </button>
+      </section>
+
+      <div className="grid items-start gap-7 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
         <section>
           <SectionHeading
             title="Recent calls"
-            subtitle="Transcript, outcome, and label"
+            subtitle="What your receptionist heard and how each call ended"
             action={
               <button
+                type="button"
                 onClick={onGoCalls}
-                className="text-xs font-medium text-[#D98E5A] hover:underline"
+                className="mr-2 min-h-9 whitespace-nowrap rounded-md px-2 text-sm font-medium text-[#D98E5A] hover:bg-[#2A2A2A] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C87941]"
               >
-                View all
+                See all calls
               </button>
             }
           />
@@ -1165,27 +1175,36 @@ function Overview({
             {recent.map((record) => (
               <div
                 key={record.id}
-                className="flex flex-wrap items-center justify-between gap-2 px-4 py-3"
+                className="flex flex-wrap items-center justify-between gap-3 px-4 py-4"
               >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-xs text-[#A8A092]">
-                    {record.id}
-                  </span>
-                  <Badge>{record.tenant}</Badge>
-                  {record.escalated ? (
-                    <Badge tone="rose">escalated</Badge>
-                  ) : (
-                    <Badge tone="emerald">contained</Badge>
-                  )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-[#EAE5DC]">
+                    {callSummary(record)}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#A8A092]">
+                    <span>{formatCallTime(record.ended_at)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{record.turns} {record.turns === 1 ? "message" : "messages"}</span>
+                  </div>
                 </div>
-                <span className="text-xs text-[#8A8379]">
-                  {record.turns} turns
-                </span>
+                <Badge tone={record.escalated ? "rose" : record.turns > 0 ? "emerald" : "slate"}>
+                  {recordOutcome(record)}
+                </Badge>
               </div>
             ))}
             {recent.length === 0 && (
               <div className="p-4">
-                <Empty>No calls yet. Start a test call.</Empty>
+                <Empty>
+                  <div className="font-medium text-[#D8D2C7]">Your call history will appear here.</div>
+                  <div className="mt-1">Try a browser call to see how your receptionist works.</div>
+                  <button
+                    type="button"
+                    onClick={onStartTest}
+                    className="mt-4 min-h-10 rounded-lg bg-[#C87941] px-4 py-2 text-sm font-semibold text-[#111111] hover:bg-[#D98E5A] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C87941]"
+                  >
+                    Try a test call
+                  </button>
+                </Empty>
               </div>
             )}
           </Card>
@@ -1193,43 +1212,114 @@ function Overview({
 
         <section>
           <SectionHeading
-            title="Live now"
-            subtitle="Active conversations on the floor"
+            title="Callers waiting now"
+            subtitle="A teammate can join calls that need personal help"
             action={
               <button
+                type="button"
                 onClick={onGoLive}
-                className="text-xs font-medium text-[#D98E5A] hover:underline"
+                className="mr-2 min-h-9 whitespace-nowrap rounded-md px-2 text-sm font-medium text-[#D98E5A] hover:bg-[#2A2A2A] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C87941]"
               >
-                Open floor
+                View live calls
               </button>
             }
           />
           <Card className="divide-y divide-[#2E2E2E]">
-            {calls.slice(0, 4).map((call) => (
+            {needsHelp.map((call) => (
               <div key={call.id} className="px-4 py-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-xs text-[#A8A092]">
-                    {call.id}
-                  </span>
-                  <Badge>{call.tenant}</Badge>
-                  {call.escalated && <Badge tone="rose">escalated</Badge>}
-                  {call.state && <Badge tone="indigo">{call.state}</Badge>}
+                  <Badge tone="rose">Needs your help</Badge>
+                  {call.tenant && <span className="text-xs text-[#A8A092]">{call.tenant}</span>}
                 </div>
-                <p className="mt-1 truncate text-xs text-[#A8A092]">
-                  {call.last_text || "…"}
+                <p className="mt-2 truncate text-sm text-[#D8D2C7]">
+                  {call.last_text || "Waiting for more details"}
                 </p>
               </div>
             ))}
-            {calls.length === 0 && (
+            {needsHelp.length === 0 && (
               <div className="p-4">
-                <Empty>Quiet right now.</Empty>
+                <Empty>No callers need a teammate right now.</Empty>
               </div>
             )}
           </Card>
         </section>
       </div>
+
+      <section aria-label="Receptionist capabilities" className="border-t border-[#3A3A3A] pt-5">
+        <h2 className="text-sm font-semibold text-[#EAE5DC]">What your receptionist can do</h2>
+        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-[#A8A092]">
+          Answer common questions from your business information, check staff availability, book or change a visit, and bring your team into a call when needed.
+        </p>
+        <p className="mt-2 text-xs text-[#8A8379]">
+          {report && report.total > 0
+            ? `${report.total} calls have been reviewed to improve handoffs.`
+            : "Review calls in Agent quality to help improve when the receptionist asks your team for help."}
+        </p>
+      </section>
     </div>
   );
+}
+
+function formatCallTime(value: string) {
+  if (!value) return "Time unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time unavailable";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function callSummary(record: CallRecord) {
+  const callerText = record.transcript?.find((turn) => turn.role === "caller")?.text;
+  if (callerText) return callerText;
+  const summary = record.summary
+    ?.replace(/^handled automatically\.?\s*/i, "")
+    .replace(/^caller asked:\s*/i, "")
+    .trim();
+  return summary || "No caller details captured";
+}
+
+function recordOutcome(record: CallRecord) {
+  if (record.escalated) return "Team help";
+  return record.turns > 0 ? "Handled" : "No details";
+}
+
+function toolLabel(tool: string) {
+  const labels: Record<string, string> = {
+    set_service: "Confirming the service",
+    save_address: "Saving the service address",
+    set_time: "Checking the requested time",
+    set_phone: "Saving the callback number",
+    check_availability: "Checking team availability",
+    book: "Booking the visit",
+    lookup_job: "Looking up the visit",
+    reschedule: "Changing the visit time",
+    cancel: "Cancelling the visit",
+    lookup_policy: "Checking business information",
+    transfer_to_human: "Asking a teammate to join",
+  };
+  return labels[tool] ?? tool.replaceAll("_", " ");
+}
+
+function languageName(code: string) {
+  if (code.toLowerCase().startsWith("hi")) return "Hindi";
+  if (code.toLowerCase().startsWith("en")) return "English";
+  return code;
+}
+
+function liveCallStatus(call: Call) {
+  const state = call.state?.toLowerCase() ?? "";
+  if (call.taken_over) return "Your teammate is speaking with the caller";
+  if (call.escalated) return "Waiting for a teammate to join";
+  if (state.includes("speak")) return "The receptionist is speaking";
+  if (state.includes("listen")) return "Listening to the caller";
+  if (state.includes("tool") || state.includes("think")) {
+    return "Working on the caller’s request";
+  }
+  return "Call in progress";
 }
 
 function LiveCallCard({
@@ -1243,26 +1333,31 @@ function LiveCallCard({
 }) {
   return (
     <Card className={`p-5 ${active ? "ring-2 ring-emerald-400/30" : ""}`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-xs text-[#A8A092]">{call.id}</span>
-        {call.tenant && <Badge>{call.tenant}</Badge>}
-        {call.lang && <Badge tone="indigo">{call.lang}</Badge>}
-        {call.state && <Badge>{call.state}</Badge>}
-        {call.escalated && <Badge tone="rose">escalated</Badge>}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-[#EAE5DC]">
+              {call.escalated ? "Caller needs help" : "Call in progress"}
+            </span>
+            {call.lang && <Badge tone="indigo">{languageName(call.lang)}</Badge>}
+          </div>
+          <p className="mt-1 text-xs text-[#A8A092]">{liveCallStatus(call)}</p>
+        </div>
         {call.taken_over ? (
-          <Badge tone="emerald">you own this</Badge>
+          <Badge tone="emerald">A teammate has joined</Badge>
         ) : (
           <button
+            type="button"
             onClick={onTakeOver}
-            className="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-[#EAE5DC] transition-colors hover:bg-emerald-500/100 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+            className="min-h-10 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-[#EAE5DC] transition-colors hover:bg-emerald-500/100 focus:outline-none focus:ring-2 focus:ring-emerald-300"
           >
-            {active ? "Rejoin" : "Take over"}
+            {active ? "Rejoin call" : "Join call"}
           </button>
         )}
       </div>
 
       {call.reason && (
-        <p className="mt-2 text-xs text-rose-300">why: {call.reason}</p>
+        <p className="mt-2 text-xs text-rose-300">Reason for handoff: {call.reason}</p>
       )}
 
       <div className="mt-3 space-y-1.5">
@@ -1301,46 +1396,53 @@ function RecordRow({
 }) {
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-xs text-[#A8A092]">{record.id}</span>
-            <Badge>{record.tenant}</Badge>
-            {record.escalated ? (
-              <Badge tone="rose">escalated</Badge>
-            ) : (
-              <Badge tone="emerald">contained</Badge>
-            )}
+      <div className="flex flex-col gap-3 p-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-[#EAE5DC]">
+            {callSummary(record)}
           </div>
-          <div className="mt-1 text-xs text-[#A8A092]">
-            {record.turns} turns · {record.reason || "no escalation"}
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-[#A8A092]">
+            <span>{formatCallTime(record.ended_at)}</span>
+            <span aria-hidden="true">·</span>
+            <span>{record.turns} {record.turns === 1 ? "message" : "messages"}</span>
+            <Badge tone={record.escalated ? "rose" : record.turns > 0 ? "emerald" : "slate"}>
+              {recordOutcome(record)}
+            </Badge>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex w-full min-w-0 flex-col gap-2 xl:max-w-[440px] xl:shrink-0">
+          <span className="text-xs text-[#A8A092]">Should a teammate have joined?</span>
+          <div className="grid w-full min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px]">
           <button
+            type="button"
+            aria-pressed={record.label === true}
             onClick={() => onLabel(true)}
-            className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+            className={`min-h-9 w-full min-w-0 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors ${
               record.label === true
                 ? "bg-rose-600 text-[#EAE5DC]"
-                : "bg-[#2E2E2E] text-[#B5AEA3] hover:bg-[#2E2E2E]"
+                : "bg-[#2E2E2E] text-[#B5AEA3] hover:bg-[#3A3A3A]"
             }`}
           >
-            needed human
+            Yes, needed
           </button>
           <button
+            type="button"
+            aria-pressed={record.label === false}
             onClick={() => onLabel(false)}
-            className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+            className={`min-h-9 w-full min-w-0 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors ${
               record.label === false
                 ? "bg-emerald-600 text-[#EAE5DC]"
-                : "bg-[#2E2E2E] text-[#B5AEA3] hover:bg-[#2E2E2E]"
+                : "bg-[#2E2E2E] text-[#B5AEA3] hover:bg-[#3A3A3A]"
             }`}
           >
-            should contain
+            No, handled well
           </button>
           <button
             onClick={onToggle}
-            aria-label="Toggle transcript"
-            className="grid h-7 w-7 place-items-center rounded-lg text-[#8A8379] transition-colors hover:bg-[#2A2A2A] hover:text-[#D8D2C7]"
+            type="button"
+            aria-label={expanded ? "Hide transcript" : "Show transcript"}
+            aria-expanded={expanded}
+            className="grid h-9 w-9 place-items-center rounded-lg text-[#A8A092] transition-colors hover:bg-[#2A2A2A] hover:text-[#D8D2C7]"
           >
             <svg
               viewBox="0 0 24 24"
@@ -1353,6 +1455,7 @@ function RecordRow({
               <path d="M6 9l6 6 6-6" />
             </svg>
           </button>
+          </div>
         </div>
       </div>
 
@@ -1434,7 +1537,7 @@ function Row({ label, value }: { label: string; value: string }) {
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg bg-[#2E2E2E] px-2 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-[#8A8379]">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-[#A8A092]">
         {label}
       </div>
       <div className="text-sm font-semibold tabular-nums text-[#EAE5DC]">
@@ -1459,28 +1562,14 @@ function Bubble({
       : "bg-[#2A2A2A] text-[#EAE5DC] ring-[#EAE5DC]/5";
   return (
     <div>
-      <div className="mb-1 text-xs font-medium uppercase tracking-wide text-[#8A8379]">
+      <div className="mb-1 text-xs font-medium uppercase tracking-wide text-[#A8A092]">
         {who}
       </div>
       <div
         className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ring-1 ${styles}`}
       >
-        {text || <span className="text-[#8A8379]">…</span>}
+        {text || <span className="text-[#A8A092]">…</span>}
       </div>
     </div>
-  );
-}
-
-function Step({ n, title, text }: { n: string; title: string; text: string }) {
-  return (
-    <li className="flex gap-3">
-      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[#C87941]/10 text-xs font-semibold text-[#D98E5A]">
-        {n}
-      </span>
-      <div>
-        <div className="text-sm font-medium text-[#EAE5DC]">{title}</div>
-        <p className="text-sm text-[#A8A092]">{text}</p>
-      </div>
-    </li>
   );
 }

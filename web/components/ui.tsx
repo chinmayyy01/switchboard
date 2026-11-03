@@ -53,13 +53,13 @@ export function Stat({
 }) {
   return (
     <div className="rounded-2xl border border-[#3A3A3A] bg-[#2A2A2A] p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-[#A8A092]">
+      <div className="text-sm font-medium text-[#A8A092]">
         {label}
       </div>
       <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-[#EAE5DC]">
         {value}
       </div>
-      {hint && <div className="mt-0.5 text-xs text-[#8A8379]">{hint}</div>}
+      {hint && <div className="mt-0.5 text-xs text-[#A8A092]">{hint}</div>}
     </div>
   );
 }
@@ -76,7 +76,7 @@ export function SectionHeading({
   return (
     <div className="mb-3 flex items-end justify-between gap-4">
       <div>
-        <h2 className="text-lg font-semibold tracking-tight text-[#EAE5DC]">
+        <h2 className="text-base font-semibold tracking-tight text-[#EAE5DC]">
           {title}
         </h2>
         {subtitle && <p className="mt-0.5 text-sm text-[#A8A092]">{subtitle}</p>}
@@ -88,7 +88,7 @@ export function SectionHeading({
 
 export function Empty({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-dashed border-[#3A3A3A] bg-[#EAE5DC]/[0.03] px-4 py-8 text-center text-sm text-[#8A8379]">
+    <div className="rounded-2xl border border-dashed border-[#3A3A3A] bg-[#EAE5DC]/[0.03] px-4 py-8 text-center text-sm leading-relaxed text-[#B5AEA3]">
       {children}
     </div>
   );
