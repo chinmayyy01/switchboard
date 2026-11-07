@@ -3,6 +3,7 @@ package booking
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -49,10 +50,11 @@ var (
 )
 
 type Brain struct {
-	store        *jobs.Store
+	store        jobs.TenantStore
 	kb           Answerer
 	tenant       string
 	businessName string
+	bookingKey   string
 	state        string
 	service      string
 	address      string
@@ -64,8 +66,12 @@ type Brain struct {
 	phoneTries   int
 }
 
-func New(store *jobs.Store, kb Answerer, tenant, businessName string) *Brain {
-	return &Brain{store: store, kb: kb, tenant: tenant, businessName: businessName, state: "greet"}
+func New(store jobs.TenantStore, kb Answerer, tenant, businessName string, bookingKey ...string) *Brain {
+	key := ""
+	if len(bookingKey) > 0 {
+		key = bookingKey[0]
+	}
+	return &Brain{store: store, kb: kb, tenant: tenant, businessName: businessName, bookingKey: key, state: "greet"}
 }
 
 func (b *Brain) name() string {
@@ -106,21 +112,21 @@ func (b *Brain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, err
 	case "address":
 		return b.addressStep(low, text)
 	case "time", "offer":
-		return b.timeStep(low, text)
+		return b.timeStep(ctx, low, text)
 	case "phone":
 		return b.phoneStep(low, text)
 	case "confirm":
-		return b.confirmStep(low)
+		return b.confirmStep(ctx, low)
 	case "cancel_phone":
-		return b.cancelPhone(low)
+		return b.cancelPhone(ctx, low)
 	case "cancel_confirm":
-		return b.cancelConfirm(low)
+		return b.cancelConfirm(ctx, low)
 	case "resched_phone":
-		return b.reschedPhone(low)
+		return b.reschedPhone(ctx, low)
 	case "resched_time":
-		return b.reschedTime(low)
+		return b.reschedTime(ctx, low)
 	case "resched_confirm":
-		return b.reschedConfirm(low)
+		return b.reschedConfirm(ctx, low)
 	}
 	return b.escalate("Sorry, let me connect you to a person.", "policy"), nil
 }
@@ -160,7 +166,7 @@ func (b *Brain) addressStep(low, text string) (agent.Outcome, error) {
 	return b.out("What day and window works? We have morning, afternoon, or evening.", "time", nil, false, ""), nil
 }
 
-func (b *Brain) timeStep(low, text string) (agent.Outcome, error) {
+func (b *Brain) timeStep(ctx context.Context, low, text string) (agent.Outcome, error) {
 	if b.state == "offer" {
 		w := parseWindow(low)
 		if w == "" {
@@ -173,7 +179,7 @@ func (b *Brain) timeStep(low, text string) (agent.Outcome, error) {
 		return b.out("Great. What's the best callback number?", "phone", nil, false, ""), nil
 	}
 
-	d := parseDate(low, b.store.Now())
+	d := parseDate(low, b.store.CurrentTime())
 	w := parseWindow(low)
 	if d != "" {
 		b.date = d
@@ -185,7 +191,10 @@ func (b *Brain) timeStep(low, text string) (agent.Outcome, error) {
 		return b.out("Which day works for you?", "time", nil, false, ""), nil
 	}
 
-	avail := b.store.AvailabilityFor(b.service, b.date)
+	avail, err := b.store.AvailabilityContext(ctx, b.service, b.date)
+	if err != nil {
+		return b.escalate("I'm having trouble checking the schedule right now. Let me connect you to a person.", "schedule_unavailable"), nil
+	}
 	if len(avail) == 0 {
 		b.date = ""
 		return b.out("That day is fully booked. What other day works?", "time", nil, false, ""), nil
@@ -215,13 +224,24 @@ func (b *Brain) phoneStep(_ string, text string) (agent.Outcome, error) {
 	), nil
 }
 
-func (b *Brain) confirmStep(low string) (agent.Outcome, error) {
+func (b *Brain) confirmStep(ctx context.Context, low string) (agent.Outcome, error) {
 	switch {
 	case isYes(low):
-		j, err := b.store.Book(b.service, b.date, b.window, b.address, b.phone)
+		request := jobs.BookingRequest{
+			Service:        b.service,
+			Date:           b.date,
+			Window:         b.window,
+			Address:        b.address,
+			Phone:          b.phone,
+		}
+		request.IdempotencyKey = jobs.BookingIdempotencyKey(b.bookingKey, request)
+		j, err := b.store.BookContext(ctx, request)
 		if err != nil {
-			b.state = "time"
-			return b.out("Sorry, that slot just got taken. What other time works?", "time", nil, false, ""), nil
+			if errors.Is(err, jobs.ErrNoStaff) || errors.Is(err, jobs.ErrNoAvailability) {
+				b.state = "time"
+				return b.out("Sorry, that slot just got taken. What other time works?", "time", nil, false, ""), nil
+			}
+			return b.escalate("I can't complete the booking right now. Let me connect you to a person.", "booking_store_unavailable"), nil
 		}
 		b.jobID = j.ID
 		return b.out(
@@ -234,12 +254,15 @@ func (b *Brain) confirmStep(low string) (agent.Outcome, error) {
 	return b.out("Shall I book it? Please say yes or no.", "confirm", nil, false, ""), nil
 }
 
-func (b *Brain) cancelPhone(low string) (agent.Outcome, error) {
+func (b *Brain) cancelPhone(ctx context.Context, low string) (agent.Outcome, error) {
 	p := validPhone(digitsFromSpeech(low))
 	if p == "" {
 		return b.out("What's the 10-digit phone number on the booking?", "cancel_phone", nil, false, ""), nil
 	}
-	found := b.store.ByPhone(p)
+	found, err := b.store.ByPhoneContext(ctx, p)
+	if err != nil {
+		return b.escalate("I can't look up that booking right now. Let me connect you to a person.", "booking_store_unavailable"), nil
+	}
 	if len(found) == 0 {
 		b.phoneTries++
 		if b.phoneTries >= 2 {
@@ -259,10 +282,10 @@ func (b *Brain) cancelPhone(low string) (agent.Outcome, error) {
 	), nil
 }
 
-func (b *Brain) cancelConfirm(low string) (agent.Outcome, error) {
+func (b *Brain) cancelConfirm(ctx context.Context, low string) (agent.Outcome, error) {
 	switch {
 	case isYes(low):
-		if err := b.store.Cancel(b.jobID); err != nil {
+		if err := b.store.CancelContext(ctx, b.jobID); err != nil {
 			return b.escalate("I couldn't cancel that. Let me connect you to a person.", "tool_error"), nil
 		}
 		return b.out("Cancelled. Anything else?", "done", toolCall("cancel", map[string]any{"id": b.jobID}), true, "cancelled"), nil
@@ -272,12 +295,15 @@ func (b *Brain) cancelConfirm(low string) (agent.Outcome, error) {
 	return b.out("Just to confirm, should I cancel it? Yes or no.", "cancel_confirm", nil, false, ""), nil
 }
 
-func (b *Brain) reschedPhone(low string) (agent.Outcome, error) {
+func (b *Brain) reschedPhone(ctx context.Context, low string) (agent.Outcome, error) {
 	p := validPhone(digitsFromSpeech(low))
 	if p == "" {
 		return b.out("What's the 10-digit phone number on the booking?", "resched_phone", nil, false, ""), nil
 	}
-	found := b.store.ByPhone(p)
+	found, err := b.store.ByPhoneContext(ctx, p)
+	if err != nil {
+		return b.escalate("I can't look up that booking right now. Let me connect you to a person.", "booking_store_unavailable"), nil
+	}
 	if len(found) == 0 {
 		b.phoneTries++
 		if b.phoneTries >= 2 {
@@ -296,8 +322,8 @@ func (b *Brain) reschedPhone(low string) (agent.Outcome, error) {
 	), nil
 }
 
-func (b *Brain) reschedTime(low string) (agent.Outcome, error) {
-	d := parseDate(low, b.store.Now())
+func (b *Brain) reschedTime(ctx context.Context, low string) (agent.Outcome, error) {
+	d := parseDate(low, b.store.CurrentTime())
 	w := parseWindow(low)
 	if d != "" {
 		b.date = d
@@ -308,7 +334,10 @@ func (b *Brain) reschedTime(low string) (agent.Outcome, error) {
 	if b.date == "" || b.window == "" {
 		return b.out("What new day and window? Morning, afternoon, or evening.", "resched_time", nil, false, ""), nil
 	}
-	avail := b.store.AvailabilityFor(b.service, b.date)
+	avail, err := b.store.AvailabilityContext(ctx, b.service, b.date)
+	if err != nil {
+		return b.escalate("I'm having trouble checking the schedule right now. Let me connect you to a person.", "schedule_unavailable"), nil
+	}
 	if !contains(avail, b.window) {
 		b.window = ""
 		return b.out("That window is full on "+prettyDate(b.date)+". I have "+joinWindows(avail)+". Which works?", "resched_time", toolCall("check_availability", map[string]any{"date": b.date}), false, ""), nil
@@ -319,10 +348,10 @@ func (b *Brain) reschedTime(low string) (agent.Outcome, error) {
 	), nil
 }
 
-func (b *Brain) reschedConfirm(low string) (agent.Outcome, error) {
+func (b *Brain) reschedConfirm(ctx context.Context, low string) (agent.Outcome, error) {
 	switch {
 	case isYes(low):
-		if err := b.store.Reschedule(b.jobID, b.date, b.window); err != nil {
+		if err := b.store.RescheduleContext(ctx, b.jobID, b.date, b.window); err != nil {
 			return b.escalate("I couldn't move that booking. Let me connect you to a person.", "tool_error"), nil
 		}
 		return b.out("Moved. Anything else?", "done", toolCall("reschedule", map[string]any{"id": b.jobID, "date": b.date, "window": b.window}), true, "rescheduled"), nil

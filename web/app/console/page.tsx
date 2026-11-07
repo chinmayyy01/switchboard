@@ -261,6 +261,12 @@ export default function Page() {
               )}
             </button>
           ))}
+          <Link
+            href="/console/livekit"
+            className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-sm font-medium text-[#B5AEA3] transition-colors hover:bg-[#2A2A2A] hover:text-[#EAE5DC]"
+          >
+            LiveKit test
+          </Link>
         </nav>
 
         <div className="space-y-2 border-t border-[#2E2E2E] p-4">
@@ -979,6 +985,7 @@ export default function Page() {
             <TeamTab
               tenant={activeTenant}
               canSwitchTenant={!!account?.is_owner && !authDisabled}
+              canManageStaff={!!account?.is_owner}
               onTenantChange={setTenant}
             />
           )}

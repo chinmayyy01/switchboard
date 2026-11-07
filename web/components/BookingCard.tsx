@@ -150,9 +150,12 @@ function formatWhen(date: string, window: string) {
 }
 
 function formatPhone(phone: string) {
-  const digits = phone.replace(/\D/g, "");
+  let digits = phone.replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91")) {
+    digits = digits.slice(2);
+  }
   if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+    return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
   }
   return phone;
 }

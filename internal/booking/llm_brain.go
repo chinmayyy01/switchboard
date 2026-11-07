@@ -3,6 +3,7 @@ package booking
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -13,12 +14,13 @@ import (
 )
 
 type LLMBrain struct {
-	store        *jobs.Store
+	store        jobs.TenantStore
 	kb           Answerer
 	llm          agent.LLM
 	tenant       string
 	businessName string
 	services     []string
+	bookingKey   string
 	history      []agent.Message
 	tools        []agent.Tool
 
@@ -34,7 +36,11 @@ type LLMBrain struct {
 	detailsPending bool
 }
 
-func NewLLM(store *jobs.Store, kb Answerer, llm agent.LLM, tenant, businessName string, services []string) *LLMBrain {
+func NewLLM(store jobs.TenantStore, kb Answerer, llm agent.LLM, tenant, businessName string, services []string, bookingKey ...string) *LLMBrain {
+	key := ""
+	if len(bookingKey) > 0 {
+		key = bookingKey[0]
+	}
 	b := &LLMBrain{
 		store:        store,
 		kb:           kb,
@@ -42,6 +48,7 @@ func NewLLM(store *jobs.Store, kb Answerer, llm agent.LLM, tenant, businessName 
 		tenant:       tenant,
 		businessName: businessName,
 		services:     services,
+		bookingKey:   key,
 	}
 	b.tools = b.buildTools()
 	return b
@@ -216,7 +223,7 @@ func (b *LLMBrain) systemPrompt(lang string) string {
 	if strings.HasPrefix(lang, "hi") {
 		language = "Hindi"
 	}
-	today := time.Now().Format("2006-01-02")
+	today := b.store.CurrentTime().Format("2006-01-02")
 	state := fmt.Sprintf(
 		`service=%q (confirmed=%v), address=%q (confirmed=%v), date=%q, window=%q (confirmed=%v), phone=%q (confirmed=%v)`,
 		b.service, !b.servicePending && b.service != "",
@@ -391,13 +398,16 @@ func (b *LLMBrain) Handle(ctx context.Context, turn agent.Turn) (agent.Outcome, 
 	return b.escalate("Let me connect you to a person who can help.", "loop_limit"), nil
 }
 
-func (b *LLMBrain) alternatives(from string) []map[string]string {
-	slots := b.store.Alternatives(b.service, from, 7)
+func (b *LLMBrain) alternatives(ctx context.Context, from string) ([]map[string]string, error) {
+	slots, err := b.store.AlternativesContext(ctx, b.service, from, 7)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]map[string]string, 0, len(slots))
 	for _, s := range slots {
 		out = append(out, map[string]string{"date": s.Date, "window": s.Window})
 	}
-	return out
+	return out, nil
 }
 
 func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang string) (string, []string, string, *agent.Outcome) {
@@ -463,12 +473,19 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 		if a.Date == "" || !jobs.ValidWindow(a.Window) {
 			return jsonResult(map[string]any{"ok": false, "error": "date and window required"}), nil, "", nil
 		}
-		avail := b.store.AvailabilityFor(b.service, a.Date)
+		avail, err := b.store.AvailabilityContext(ctx, b.service, a.Date)
+		if err != nil {
+			return jsonResult(map[string]any{"ok": false, "error": "schedule_unavailable"}), nil, "", b.escalatePtr("I'm having trouble checking the schedule right now. Let me connect you to a person.", "schedule_unavailable")
+		}
 		if !contains(avail, a.Window) {
+			alternatives, err := b.alternatives(ctx, a.Date)
+			if err != nil {
+				return jsonResult(map[string]any{"ok": false, "error": "schedule_unavailable"}), nil, "", b.escalatePtr("I'm having trouble checking the schedule right now. Let me connect you to a person.", "schedule_unavailable")
+			}
 			return jsonResult(map[string]any{
 				"ok":           false,
 				"windows":      avail,
-				"alternatives": b.alternatives(a.Date),
+				"alternatives": alternatives,
 			}), nil, "", nil
 		}
 		b.date = a.Date
@@ -494,10 +511,18 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 			Date string `json:"date"`
 		}
 		json.Unmarshal(call.Args, &a)
+		avail, err := b.store.AvailabilityContext(ctx, b.service, a.Date)
+		if err != nil {
+			return jsonResult(map[string]any{"ok": false, "error": "schedule_unavailable"}), nil, "", b.escalatePtr("I'm having trouble checking the schedule right now. Let me connect you to a person.", "schedule_unavailable")
+		}
+		alternatives, err := b.alternatives(ctx, a.Date)
+		if err != nil {
+			return jsonResult(map[string]any{"ok": false, "error": "schedule_unavailable"}), nil, "", b.escalatePtr("I'm having trouble checking the schedule right now. Let me connect you to a person.", "schedule_unavailable")
+		}
 		return jsonResult(map[string]any{
 			"date":         a.Date,
-			"windows":      b.store.AvailabilityFor(b.service, a.Date),
-			"alternatives": b.alternatives(a.Date),
+			"windows":      avail,
+			"alternatives": alternatives,
 		}), nil, "", nil
 
 	case "set_phone":
@@ -541,12 +566,27 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 			b.servicePending || b.addressPending || b.timePending || b.phonePending || !b.detailsPending {
 			return jsonResult(map[string]any{"ok": false, "error": "read back the details first"}), nil, "", nil
 		}
-		j, err := b.store.Book(b.service, b.date, b.window, b.address, b.phone)
+		request := jobs.BookingRequest{
+			Service:        b.service,
+			Date:           b.date,
+			Window:         b.window,
+			Address:        b.address,
+			Phone:          b.phone,
+		}
+		request.IdempotencyKey = jobs.BookingIdempotencyKey(b.bookingKey, request)
+		j, err := b.store.BookContext(ctx, request)
 		if err != nil {
+			if !errors.Is(err, jobs.ErrNoStaff) && !errors.Is(err, jobs.ErrNoAvailability) && !errors.Is(err, jobs.ErrInvalid) {
+				return jsonResult(map[string]any{"ok": false, "error": "booking_unavailable"}), nil, "", b.escalatePtr("I can't complete the booking right now. Let me connect you to a person.", "booking_store_unavailable")
+			}
+			alternatives, alternativeErr := b.alternatives(ctx, b.date)
+			if alternativeErr != nil {
+				return jsonResult(map[string]any{"ok": false, "error": "schedule_unavailable"}), nil, "", b.escalatePtr("I'm having trouble checking the schedule right now. Let me connect you to a person.", "schedule_unavailable")
+			}
 			return jsonResult(map[string]any{
 				"ok":           false,
 				"error":        err.Error(),
-				"alternatives": b.alternatives(b.date),
+				"alternatives": alternatives,
 			}), nil, "", nil
 		}
 		return jsonResult(map[string]any{
@@ -560,7 +600,10 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 			Phone string `json:"phone"`
 		}
 		json.Unmarshal(call.Args, &a)
-		found := b.store.ByPhone(validPhone(digitsFromSpeech(a.Phone)))
+		found, err := b.store.ByPhoneContext(ctx, validPhone(digitsFromSpeech(a.Phone)))
+		if err != nil {
+			return jsonResult(map[string]any{"ok": false, "error": "booking_lookup_unavailable"}), nil, "", b.escalatePtr("I can't look up that booking right now. Let me connect you to a person.", "booking_store_unavailable")
+		}
 		list := make([]map[string]any, 0, len(found))
 		for _, j := range found {
 			list = append(list, map[string]any{
@@ -577,11 +620,17 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 			Window string `json:"window"`
 		}
 		json.Unmarshal(call.Args, &a)
-		found := b.store.ByPhone(validPhone(digitsFromSpeech(a.Phone)))
+		found, err := b.store.ByPhoneContext(ctx, validPhone(digitsFromSpeech(a.Phone)))
+		if err != nil {
+			return jsonResult(map[string]any{"ok": false, "error": "booking_lookup_unavailable"}), nil, "", b.escalatePtr("I can't look up that booking right now. Let me connect you to a person.", "booking_store_unavailable")
+		}
 		if len(found) == 0 {
 			return jsonResult(map[string]any{"ok": false, "error": "no booking found"}), nil, "", nil
 		}
-		if err := b.store.Reschedule(found[0].ID, a.Date, a.Window); err != nil {
+		if err := b.store.RescheduleContext(ctx, found[0].ID, a.Date, a.Window); err != nil {
+			if !errors.Is(err, jobs.ErrNoStaff) && !errors.Is(err, jobs.ErrNoAvailability) && !errors.Is(err, jobs.ErrInvalid) && !errors.Is(err, jobs.ErrNotFound) {
+				return jsonResult(map[string]any{"ok": false, "error": "booking_update_unavailable"}), nil, "", b.escalatePtr("I can't update that booking right now. Let me connect you to a person.", "booking_store_unavailable")
+			}
 			return jsonResult(map[string]any{"ok": false, "error": err.Error()}), nil, "", nil
 		}
 		return jsonResult(map[string]any{"ok": true, "job_id": found[0].ID, "date": a.Date, "window": a.Window}), nil, "rescheduled", nil
@@ -591,11 +640,17 @@ func (b *LLMBrain) execTool(ctx context.Context, call agent.ToolCall, lang strin
 			Phone string `json:"phone"`
 		}
 		json.Unmarshal(call.Args, &a)
-		found := b.store.ByPhone(validPhone(digitsFromSpeech(a.Phone)))
+		found, err := b.store.ByPhoneContext(ctx, validPhone(digitsFromSpeech(a.Phone)))
+		if err != nil {
+			return jsonResult(map[string]any{"ok": false, "error": "booking_lookup_unavailable"}), nil, "", b.escalatePtr("I can't look up that booking right now. Let me connect you to a person.", "booking_store_unavailable")
+		}
 		if len(found) == 0 {
 			return jsonResult(map[string]any{"ok": false, "error": "no booking found"}), nil, "", nil
 		}
-		if err := b.store.Cancel(found[0].ID); err != nil {
+		if err := b.store.CancelContext(ctx, found[0].ID); err != nil {
+			if !errors.Is(err, jobs.ErrNotFound) {
+				return jsonResult(map[string]any{"ok": false, "error": "booking_update_unavailable"}), nil, "", b.escalatePtr("I can't update that booking right now. Let me connect you to a person.", "booking_store_unavailable")
+			}
 			return jsonResult(map[string]any{"ok": false, "error": err.Error()}), nil, "", nil
 		}
 		return jsonResult(map[string]any{"ok": true, "job_id": found[0].ID}), nil, "cancelled", nil

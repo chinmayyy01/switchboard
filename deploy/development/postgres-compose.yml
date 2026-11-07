@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: switchboard
+      POSTGRES_USER: switchboard
+      POSTGRES_PASSWORD: switchboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - switchboard-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U switchboard -d switchboard"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  switchboard-pgdata:

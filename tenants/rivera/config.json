@@ -1,6 +1,30 @@
 {
   "id": "rivera",
   "name": "Rivera Plumbing & HVAC",
-  "services": ["leak repair", "drain cleaning", "water heater", "ac service", "heating", "maintenance"],
-  "windows": ["morning", "afternoon", "evening"]
+  "services": [
+    "leak repair",
+    "drain cleaning",
+    "water heater",
+    "ac service",
+    "heating",
+    "maintenance"
+  ],
+  "windows": [
+    "morning",
+    "afternoon",
+    "evening"
+  ],
+  "telephony": {
+    "provider": "plivo",
+    "number": ""
+  },
+  "persona": {
+    "agent_name": "Alex",
+    "tone": "warm, brief, and natural",
+    "languages": [
+      "en",
+      "hi"
+    ]
+  },
+  "disclosure": "Hi! This is an AI voice assistant for Rivera Plumbing & HVAC. Before we begin, I'd like to let you know that this call can be recorded for quality and service purposes. Are you comfortable proceeding with the call being recorded, or would you prefer to continue without recording?"
 }

@@ -242,15 +242,15 @@ func run(ctx context.Context, c *websocket.Conn, h *hub.Hub, st *store.Store, re
 
 	var brain agent.Brain
 	if o := openai.NewSarvamFromEnv(); o != nil {
-		brain = booking.NewLLM(jobStore, kb, o, t.ID, t.Name, t.Services)
+		brain = booking.NewLLM(jobStore, kb, o, t.ID, t.Name, t.Services, callID)
 	} else if o := openai.NewFromEnv(); o != nil {
-		brain = booking.NewLLM(jobStore, kb, o, t.ID, t.Name, t.Services)
+		brain = booking.NewLLM(jobStore, kb, o, t.ID, t.Name, t.Services, callID)
 	} else if isReal && os.Getenv("BRAIN") == "llm" {
-		brain = booking.NewLLM(jobStore, kb, sel.Select("").LLM, t.ID, t.Name, t.Services)
+		brain = booking.NewLLM(jobStore, kb, sel.Select("").LLM, t.ID, t.Name, t.Services, callID)
 	} else if isReal && os.Getenv("BRAIN") == "hybrid" {
-		brain = booking.NewHybrid(booking.New(jobStore, kb, t.ID, t.Name), sel.Select("").LLM)
+		brain = booking.NewHybrid(booking.New(jobStore, kb, t.ID, t.Name, callID), sel.Select("").LLM)
 	} else {
-		brain = booking.New(jobStore, kb, t.ID, t.Name)
+		brain = booking.New(jobStore, kb, t.ID, t.Name, callID)
 	}
 
 	sess := agent.NewSession(sel, brain, wsSink{w: w, hub: h, callID: callID})
@@ -405,8 +405,10 @@ func push(msgs chan callMsg, m callMsg, dropped *atomic.Int64) {
 }
 
 func newCallID() string {
-	var b [4]byte
-	rand.Read(b[:])
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("call-%x", time.Now().UnixNano())
+	}
 	return "call-" + hex.EncodeToString(b[:])
 }
 

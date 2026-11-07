@@ -14,8 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chinmay/switchboard/internal/agentauth"
+	"github.com/chinmay/switchboard/internal/ai"
 	"github.com/chinmay/switchboard/internal/api"
 	"github.com/chinmay/switchboard/internal/auth"
+	"github.com/chinmay/switchboard/internal/calls"
 	"github.com/chinmay/switchboard/internal/hub"
 	"github.com/chinmay/switchboard/internal/jobs"
 	"github.com/chinmay/switchboard/internal/metrics"
@@ -71,12 +74,42 @@ func main() {
 	h := hub.New()
 	st := store.New(*dataDir, 500)
 	reg := ws.NewBridgeRegistry()
-	jobsReg := jobs.NewRegistry("tenants")
 
 	tenants, err := tenant.Load("tenants")
 	if err != nil {
 		slog.Warn("tenant config", "err", err)
 		tenants = tenant.Default()
+	}
+	bookingDB, err := jobs.OpenPostgres(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		slog.Error("bookings database", "err", err)
+		os.Exit(1)
+	}
+	defer bookingDB.Close()
+	jobsReg, err := jobs.NewPostgresRegistry(ctx, bookingDB, "tenants", tenants.IDs())
+	if err != nil {
+		slog.Error("booking store", "err", err)
+		os.Exit(1)
+	}
+	callsStore := calls.New(bookingDB)
+	agentKey := os.Getenv("AGENT_API_KEY")
+	agentTokenSecret := os.Getenv("AGENT_TOKEN_SECRET")
+	if agentKey == "" {
+		slog.Warn("AGENT_API_KEY is not set; the LiveKit agent cannot start sessions")
+	}
+	if agentTokenSecret == "" {
+		agentTokenSecret = agentKey
+	}
+	tools := &api.Tools{
+		Jobs:        jobsReg,
+		Calls:       callsStore,
+		AI:          ai.NewFromEnv(),
+		Tenants:     tenants,
+		AgentKey:    agentKey,
+		TokenSecret: agentTokenSecret,
+	}
+	requireAgent := func(next http.HandlerFunc) http.HandlerFunc {
+		return agentauth.Require(agentTokenSecret, next)
 	}
 
 	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -97,6 +130,23 @@ func main() {
 	mux.HandleFunc("GET /api/report", requireAuth(api.Report(st)))
 	mux.HandleFunc("GET /api/geocode", api.Geocode())
 	mux.HandleFunc("GET /api/staff", requireAuth(api.Staff(jobsReg)))
+	mux.HandleFunc("POST /api/staff", requireAuth(api.Staff(jobsReg)))
+	mux.HandleFunc("PUT /api/staff/{id}", requireAuth(api.Staff(jobsReg)))
+	mux.HandleFunc("PATCH /api/staff/{id}", requireAuth(api.Staff(jobsReg)))
+	mux.HandleFunc("GET /api/livekit/token", requireAuth(api.LiveKitToken(tenants)))
+	mux.HandleFunc("POST /internal/agent/session", tools.AgentSession())
+	mux.HandleFunc("POST /internal/tools/availability", requireAgent(tools.Availability()))
+	mux.HandleFunc("POST /internal/tools/save-address", requireAgent(tools.SaveAddress()))
+	mux.HandleFunc("POST /internal/tools/save-phone", requireAgent(tools.SavePhone()))
+	mux.HandleFunc("POST /internal/tools/confirm-booking", requireAgent(tools.ConfirmBooking()))
+	mux.HandleFunc("POST /internal/tools/book", requireAgent(tools.Book()))
+	mux.HandleFunc("POST /internal/tools/reschedule", requireAgent(tools.Reschedule()))
+	mux.HandleFunc("POST /internal/tools/cancel", requireAgent(tools.Cancel()))
+	mux.HandleFunc("POST /internal/tools/lookup", requireAgent(tools.Lookup()))
+	mux.HandleFunc("POST /internal/tools/policy", requireAgent(tools.Policy()))
+	mux.HandleFunc("POST /internal/tools/consent", requireAgent(tools.Consent()))
+	mux.HandleFunc("POST /internal/tools/escalate", requireAgent(tools.Escalate()))
+	mux.HandleFunc("POST /internal/tools/end", requireAgent(tools.End()))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		brain := "rules"
 		if openai.NewSarvamFromEnv() != nil {
@@ -147,7 +197,7 @@ func withCORS(next http.Handler, origins []string) http.Handler {
 		if origin != "" && allowed[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Add("Vary", "Origin")
 		}

@@ -1,6 +1,24 @@
 {
   "id": "acme",
   "name": "Acme Home Services",
-  "services": ["leak repair", "drain cleaning"],
-  "windows": ["morning", "afternoon"]
+  "services": [
+    "leak repair",
+    "drain cleaning"
+  ],
+  "windows": [
+    "morning",
+    "afternoon"
+  ],
+  "telephony": {
+    "provider": "plivo",
+    "number": ""
+  },
+  "persona": {
+    "agent_name": "Sam",
+    "tone": "calm, direct, and efficient",
+    "languages": [
+      "en"
+    ]
+  },
+  "disclosure": "Hi! This is an AI voice assistant for Acme Home Services. Before we begin, I'd like to let you know that this call can be recorded for quality and service purposes. Are you comfortable proceeding with the call being recorded, or would you prefer to continue without recording?"
 }

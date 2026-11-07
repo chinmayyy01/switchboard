@@ -12,6 +12,7 @@ and DNS.
 - Go 1.26+
 - Node.js 22+
 - Python 3.12
+- PostgreSQL 16+ (managed service recommended)
 - Caddy 2
 - Ollama
 - A domain pointing at the VM
@@ -41,6 +42,7 @@ APP_ORIGIN=https://voice.example.com
 COOKIE_SECURE=true
 AUTH_DB=data/auth.db
 AUTH_DISABLED=false
+DATABASE_URL=postgres://switchboard:...@db.example.com:5432/switchboard?sslmode=require
 SARVAM_API_KEY=sk_...
 STT_PROVIDER=sarvam
 TTS_PROVIDER=sarvam
@@ -91,6 +93,8 @@ sudo -u switchboard inference/.venv/bin/python inference/ingest.py \
 sudo -u switchboard inference/.venv/bin/python inference/ingest.py \
   --tenant acme --docs tenants/acme/docs
 ```
+
+The Go service applies versioned booking/staff schema migrations at startup. Keep a database backup before deploying a new version.
 
 Build the web app with public URLs baked in:
 
@@ -167,9 +171,8 @@ address.
 
 ## Notes
 
+- Bookings and staff are stored in PostgreSQL. Call transcripts remain in `data/`.
 - The Go call limiter and auth sessions are single-instance. Use one Go process,
   or move quotas and sessions to Redis/Postgres before scaling out.
-- Jobs and staff are in memory and reset on restart. Call records persist in
-  `data/`.
 - Set `AUTH_DISABLED=false` for any public deployment.
 - SMS and telephony are not part of this version.

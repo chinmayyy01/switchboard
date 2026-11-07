@@ -6,17 +6,44 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
+type Telephony struct {
+	Provider string `json:"provider,omitempty"`
+	Number   string `json:"number,omitempty"`
+}
+
+type Persona struct {
+	AgentName string   `json:"agent_name,omitempty"`
+	Tone      string   `json:"tone,omitempty"`
+	Languages []string `json:"languages,omitempty"`
+	Greeting  string   `json:"greeting,omitempty"`
+}
+
 type Tenant struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Services []string `json:"services"`
-	Windows  []string `json:"windows"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Services      []string  `json:"services"`
+	Windows       []string  `json:"windows"`
+	Telephony     Telephony `json:"telephony,omitempty"`
+	Persona       Persona   `json:"persona,omitempty"`
+	ManagerNumber string    `json:"manager_number,omitempty"`
+	Disclosure    string    `json:"disclosure,omitempty"`
 }
 
 type Registry struct {
 	byID map[string]Tenant
+}
+
+// New builds a registry from explicit tenants. Used by tests and by callers
+// that load configuration from somewhere other than the tenant directory.
+func New(items ...Tenant) *Registry {
+	reg := &Registry{byID: make(map[string]Tenant, len(items))}
+	for _, item := range items {
+		reg.byID[item.ID] = item
+	}
+	return reg
 }
 
 func Load(dir string) (*Registry, error) {
@@ -41,6 +68,12 @@ func Load(dir string) (*Registry, error) {
 		if t.ID == "" {
 			t.ID = entry.Name()
 		}
+		if t.ManagerNumber == "" {
+			t.ManagerNumber = os.Getenv("MANAGER_NUMBER_" + strings.ToUpper(t.ID))
+			if t.ManagerNumber == "" {
+				t.ManagerNumber = os.Getenv("MANAGER_NUMBER")
+			}
+		}
 		reg.byID[t.ID] = t
 	}
 	return reg, nil
@@ -58,6 +91,11 @@ func (r *Registry) IDs() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ManagerPhone returns the tenant's configured transfer target.
+func (t Tenant) ManagerPhone() string {
+	return t.ManagerNumber
 }
 
 func Default() *Registry {

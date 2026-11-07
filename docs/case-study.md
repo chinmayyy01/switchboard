@@ -111,8 +111,9 @@ are real enough to exercise assignment and release. Tenant data is fictional.
 present, but the running preview uses `AUTH_DISABLED=true` so it can be opened
 without a login. This must be off before a public deployment.
 
-**In memory jobs.** Jobs and staff reset on restart; call records are appended to
-`data/calls.jsonl`. Postgres is the next step for a real product.
+**Separate durable business data from demo transcripts.** Jobs and staff persist
+in PostgreSQL. Call records append to `data/calls.jsonl`; review labels live in
+`data/labels.json`.
 
 ## Measured results
 
@@ -121,29 +122,31 @@ benchmark.
 
 | Area | Result |
 | --- | --- |
-| Booking | 5 of 5 scripted scenarios; live Sarvam smoke call booked end to end |
-| Live smoke | 9 tools, booked with a named technician, no escalation |
-| Escalation | precision 0.909, recall 0.909 on 22 labelled calls |
+| Booking | 5 of 5 scripted scenarios; one prior live Sarvam smoke booking (requires API credentials/credits) |
+| Live smoke | One recorded run: 9 tools, booked with a named technician, no escalation |
+| Escalation | precision 0.909, recall 0.909 on 22 hand-authored scenarios; not a labeled real-call sample |
 | Retrieval | recall@1 1.00, recall@3 1.00, MRR 1.00 on 18 questions |
 | Grounding | grounded 0.944, abstention 0.833 on 18 questions |
 | First audio | 0.65 s to 1.3 s on the earlier live smoke; 0.84 s to 3.9 s in the latest run |
 | Local fallback | p95 1.50 s at 5 calls, 2.83 s at 10 calls on CPU Whisper and Piper |
-| Load | 500 fake callers, 0 failures, p95 around 10 ms with fake providers |
+| Load | `make load` runs 50 synthetic callers; the older 500-caller result has no checked-in report |
 | Usage per 9-turn call | about 23k prompt tokens, 396 completion tokens |
 
-Across smoke runs, slow turns reached 6.6 s STT and 4.8 s TTS. The
-bottleneck is provider variance on the free path, not the Go broker. The next
-step is a latency budget with p95 alerts and a fallback provider.
+These are one-off local demo measurements, not a reproducible benchmark. The
+current repository includes the 22-case escalation suite and an 18-question RAG
+suite, but no labeled real-call set or archived performance report. Prior smoke
+runs reached 6.6 s STT and 4.8 s TTS; those provider-dependent measurements need
+to be rerun before being treated as current performance evidence.
 
 ## What I would build next
 
-1. Telephony: SIP or Twilio Media Streams, inbound DIDs, and transfer.
-2. Persistence: Postgres for jobs, staff, accounts, and messages; Redis for
-   quotas and multi-instance call slots.
-3. Recordings and consent with retention controls.
-4. Auth and billing: Google sign-in, verified email, 2-call trials, paid plans.
-5. SMS confirmation and reminder after the booking.
-6. p95 latency and cost budgets per tenant, with alerts.
+1. Telephony: choose a provider and region, add inbound numbers, and bridge
+   provider audio into the existing realtime call flow.
+2. Phone handoff: transfer to a real teammate with ring timeout and fallback.
+3. Onboarding and access control: connect a business, manage account roles, and
+   configure consent and data retention.
+4. SMS confirmation and reminders after a booking.
+5. Per-tenant cost budgets, latency SLOs, alerts, and an incident runbook.
 
 ## Links
 
