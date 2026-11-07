@@ -26,6 +26,7 @@ export type LiveBooking = {
   address: string;
   date: string;
   window: string;
+  phone: string;
   employee: string;
 };
 
@@ -51,6 +52,7 @@ export function useLiveKitCall() {
   const [booking, setBooking] = useState<LiveBooking | null>(null);
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const [agentSpeaking, setAgentSpeaking] = useState(false);
+  const [audioBlocked, setAudioBlocked] = useState(false);
 
   const registerTranscription = useCallback((room: Room) => {
     room.registerTextStreamHandler(
@@ -97,6 +99,7 @@ export function useLiveKitCall() {
               address: String(event.address ?? ""),
               date: String(event.date ?? ""),
               window: String(event.window ?? ""),
+              phone: String(event.phone ?? ""),
               employee: String(event.employee ?? ""),
             });
           }
@@ -109,11 +112,17 @@ export function useLiveKitCall() {
 
   const attachAudio = useCallback((track: RemoteTrack) => {
     if (track.kind !== "audio") return;
-    const host = audioHostRef.current;
-    if (!host) return;
+    // The component that owns the host may not be mounted yet when a call is
+    // started from Overview, so fall back to the document body.
+    const host = audioHostRef.current ?? document.body;
     const element = track.attach() as HTMLAudioElement;
     element.autoplay = true;
+    element.setAttribute("playsinline", "true");
+    element.dataset.switchboardAudio = "true";
     host.appendChild(element);
+    // Autoplay can still be blocked even after room.startAudio(), especially
+    // when the agent track arrives after the initial click.
+    void element.play().catch(() => setAudioBlocked(true));
   }, []);
 
   const start = useCallback(
@@ -139,7 +148,14 @@ export function useLiveKitCall() {
 
         registerTranscription(room);
         registerEvents(room);
-        room.on(RoomEvent.TrackSubscribed, (track) => attachAudio(track));
+        room.on(RoomEvent.TrackSubscribed, (track) => {
+          // Retry audio unlock when the agent's track arrives.
+          void room.startAudio().catch(() => undefined);
+          attachAudio(track);
+        });
+        room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+          setAudioBlocked(!room.canPlaybackAudio);
+        });
         room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
           setAgentSpeaking(
             speakers.some((speaker) => speaker.identity !== room.localParticipant.identity),
@@ -152,7 +168,8 @@ export function useLiveKitCall() {
 
         await room.connect(token.url, token.token);
         await room.localParticipant.setMicrophoneEnabled(true);
-        await room.startAudio();
+        const audioStarted = await room.startAudio().catch(() => false);
+        setAudioBlocked(!audioStarted && !room.canPlaybackAudio);
         setStatus("connected");
       } catch (error) {
         setStatus("error");
@@ -164,12 +181,33 @@ export function useLiveKitCall() {
     [attachAudio, registerEvents, registerTranscription],
   );
 
+  const enableAudio = useCallback(async () => {
+    const room = roomRef.current;
+    if (!room) return;
+    const started = await room.startAudio().catch(() => false);
+    setAudioBlocked(!started && !room.canPlaybackAudio);
+  }, []);
+
+  const sendText = useCallback(async (text: string) => {
+    const room = roomRef.current;
+    if (!room || room.state !== "connected") return false;
+    try {
+      await room.localParticipant.sendText(text, { topic: "lk.chat" });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const end = useCallback(async () => {
     const room = roomRef.current;
     roomRef.current = null;
     setStatus("idle");
     setAgentSpeaking(false);
     if (audioHostRef.current) audioHostRef.current.replaceChildren();
+    document
+      .querySelectorAll("[data-switchboard-audio]")
+      .forEach((element) => element.remove());
     await room?.disconnect();
   }, []);
 
@@ -177,6 +215,9 @@ export function useLiveKitCall() {
     return () => {
       void roomRef.current?.disconnect();
       roomRef.current = null;
+      document
+        .querySelectorAll("[data-switchboard-audio]")
+        .forEach((element) => element.remove());
     };
   }, []);
 
@@ -188,9 +229,12 @@ export function useLiveKitCall() {
     booking,
     events,
     agentSpeaking,
+    audioBlocked,
     audioHostRef,
     start,
     end,
+    enableAudio,
+    sendText,
     connected: status === "connected" || status === "connecting",
     connectionState: roomRef.current?.state ?? ConnectionState.Disconnected,
   };

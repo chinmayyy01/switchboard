@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { BookingCard } from "@/components/BookingCard";
+import { LiveKitTestCall } from "@/components/LiveKitTestCall";
 import { PhotoCard } from "@/components/PhotoCard";
 import { TeamTab } from "@/components/TeamTab";
 import { Badge, Card, Empty, SectionHeading, Stat } from "@/components/ui";
@@ -10,6 +11,7 @@ import { useBridge } from "@/lib/useBridge";
 import { useSession } from "@/lib/session";
 import { useSupervisor, type Call } from "@/lib/useSupervisor";
 import { useSwitchboard } from "@/lib/useSwitchboard";
+import { useLiveKitCall } from "@/lib/useLiveKitCall";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
@@ -71,9 +73,11 @@ export default function Page() {
     endCall,
     sendText,
   } = useSwitchboard();
+  const livekit = useLiveKitCall();
   const { account, logout, refresh } = useSession();
   const { calls, connected } = useSupervisor();
   const [tab, setTab] = useState<Tab>("overview");
+  const [transport, setTransport] = useState<"livekit" | "legacy">("livekit");
   const [selectedId, setSelectedId] = useState("");
   const { status: bridgeStatus } = useBridge(selectedId);
   const [lang, setLang] = useState("en");
@@ -171,6 +175,11 @@ export default function Page() {
   const startTest = () => {
     if (outOfCalls) return;
     setSelectedId("");
+    if (transport === "livekit") {
+      void livekit.start(activeTenant);
+      setTab("test");
+      return;
+    }
     startCall(lang, activeTenant, micId);
     setTab("test");
   };
@@ -261,12 +270,6 @@ export default function Page() {
               )}
             </button>
           ))}
-          <Link
-            href="/console/livekit"
-            className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-sm font-medium text-[#B5AEA3] transition-colors hover:bg-[#2A2A2A] hover:text-[#EAE5DC]"
-          >
-            LiveKit test
-          </Link>
         </nav>
 
         <div className="space-y-2 border-t border-[#2E2E2E] p-4">
@@ -409,6 +412,39 @@ export default function Page() {
                 subtitle="Speak naturally, ask a question, or try booking a visit. You can interrupt at any time."
               />
 
+              <div className="mb-5 flex flex-wrap items-center gap-3">
+                <span className="text-sm font-medium text-[#A8A092]">Transport</span>
+                <div className="inline-flex rounded-lg border border-[#3A3A3A] bg-[#242424] p-1">
+                  {(["livekit", "legacy"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setTransport(mode)}
+                      className={`min-h-8 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                        transport === mode
+                          ? "bg-[#C87941] text-[#111111]"
+                          : "text-[#B5AEA3] hover:bg-[#2A2A2A]"
+                      }`}
+                    >
+                      {mode === "livekit" ? "WebRTC (LiveKit)" : "Legacy (Sarvam)"}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-xs text-[#8A8379]">
+                  {transport === "livekit"
+                    ? "Phone-ready agent. Recommended."
+                    : "Original WebSocket pipeline, kept for rollback."}
+                </span>
+              </div>
+
+              {transport === "livekit" ? (
+                <LiveKitTestCall
+                  call={livekit}
+                  tenant={activeTenant}
+                  canSwitchTenant={!!account?.is_owner && !authDisabled}
+                  onTenantChange={setTenant}
+                />
+              ) : (
               <div className="grid items-start gap-6 lg:grid-cols-2">
                 <Card className="p-6">
                   <div className="flex items-start justify-between gap-4">
@@ -655,6 +691,7 @@ export default function Page() {
                   </Card>
                 </div>
               </div>
+              )}
             </div>
           )}
 

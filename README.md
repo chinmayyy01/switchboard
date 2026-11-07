@@ -191,8 +191,7 @@ Open:
 
 - Landing: http://localhost:3000
 - Console: http://localhost:3000/console
-- Test call: http://localhost:3000/console?tab=test
-- LiveKit WebRTC test: http://localhost:3000/console/livekit
+- Test call: http://localhost:3000/console?tab=test (choose WebRTC or the legacy transport)
 - Sign in, when auth is enabled: http://localhost:3000/login
 
 With auth disabled, open the console and start a call. With auth enabled, sign in with the owner or a trial account. Allow the microphone, use headphones, and press **Start call**. The AI service loads Whisper and Piper at startup; a local model downloads on first run if it is not cached.

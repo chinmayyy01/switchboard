@@ -58,6 +58,11 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     metadata = _job_metadata(ctx)
     tenant_id = str(metadata.get("tenant_id") or "")
+    if not tenant_id and os.getenv("ALLOW_DEV_TENANT", "false").lower() == "true":
+        # Lets the LiveKit Agent Console start a session without our token
+        # endpoint. Keep this off in production.
+        tenant_id = os.getenv("DEV_TENANT", "rivera")
+        metadata["tenant_id"] = tenant_id
     if not tenant_id:
         logger.error("job metadata has no tenant_id; refusing to answer")
         await ctx.shutdown()
@@ -82,6 +87,25 @@ async def entrypoint(ctx: JobContext) -> None:
         room=ctx.room,
         record={"audio": False, "transcript": False, "traces": True, "logs": True, "redaction": True},
     )
+
+    @session.on("conversation_item_added")
+    def on_item(ev) -> None:
+        item = ev.item
+        metrics = getattr(item, "metrics", None) or {}
+        role = getattr(item, "role", "")
+        if role == "user" and metrics.get("end_of_turn_delay") is not None:
+            logger.info(
+                "latency.user eou=%.2fs stt=%.2fs",
+                metrics.get("end_of_turn_delay", 0),
+                metrics.get("transcription_delay", 0),
+            )
+        if role == "assistant" and metrics.get("e2e_latency") is not None:
+            logger.info(
+                "latency.assistant e2e=%.2fs llm_ttft=%.2fs tts_ttfb=%.2fs",
+                metrics.get("e2e_latency", 0),
+                metrics.get("llm_node_ttft", 0),
+                metrics.get("tts_node_ttfb", 0),
+            )
 
     @session.on("user_input_transcribed")
     def on_transcribed(ev: UserInputTranscribedEvent) -> None:

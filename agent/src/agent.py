@@ -56,8 +56,13 @@ class Receptionist(Agent):
     async def save_callback_number(self, context: RunContext, phone: str) -> dict:
         """Save and validate the caller's 10-digit Indian mobile number.
 
+        Pass the number exactly as the caller said it. Spaces, brackets, dashes,
+        and +91 are accepted; do not reject or reformat the caller's number
+        before calling this tool.
+
         Args:
-            phone: The caller's 10-digit mobile number, with or without +91.
+            phone: The caller's number as spoken, for example "6202416257",
+                "+91 62024 16257", or "(620) 241-6257".
         """
         return await self.client.post("/internal/tools/save-phone", {"phone": phone})
 
@@ -112,6 +117,7 @@ class Receptionist(Agent):
             address=job.get("address", ""),
             date=job.get("date", ""),
             window=job.get("window", ""),
+            phone=job.get("phone", ""),
             employee=job.get("employee_name", ""),
         )
         return data

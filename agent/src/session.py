@@ -4,7 +4,7 @@ import logging
 import os
 
 from livekit.agents import AgentSession, TurnHandlingOptions, inference
-from livekit.agents.voice.turn import EndpointingOptions
+from livekit.agents.voice.turn import EndpointingOptions, PreemptiveGenerationOptions
 from livekit.agents.llm import FallbackAdapter as LLMFallback
 from livekit.agents.stt import FallbackAdapter as STTFallback
 from livekit.agents.tts import FallbackAdapter as TTSFallback
@@ -40,7 +40,7 @@ def _llms():
         from livekit.plugins import google
 
         options = {
-            "model": os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
+            "model": os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
             "api_key": gemini_key,
         }
         level = os.getenv("GEMINI_THINKING_LEVEL", "minimal")
@@ -93,6 +93,12 @@ def _stt(cfg: SessionConfig):
 
 def _tts():
     candidates = []
+    if os.getenv("CARTESIA_API_KEY"):
+        options = {"model": os.getenv("CARTESIA_MODEL", "sonic-3")}
+        if os.getenv("CARTESIA_VOICE_ID"):
+            options["voice"] = os.environ["CARTESIA_VOICE_ID"]
+        # Cartesia has the lowest time-to-first-audio in our benchmark.
+        candidates.append(cartesia.TTS(**options))
     eleven_key = os.getenv("ELEVEN_API_KEY") or os.getenv("ELEVENLABS_API_KEY")
     if eleven_key:
         options = {
@@ -102,11 +108,6 @@ def _tts():
         if os.getenv("ELEVEN_VOICE_ID"):
             options["voice_id"] = os.environ["ELEVEN_VOICE_ID"]
         candidates.append(elevenlabs.TTS(**options))
-    if os.getenv("CARTESIA_API_KEY"):
-        options = {"model": os.getenv("CARTESIA_MODEL", "sonic-3")}
-        if os.getenv("CARTESIA_VOICE_ID"):
-            options["voice"] = os.environ["CARTESIA_VOICE_ID"]
-        candidates.append(cartesia.TTS(**options))
     if not candidates:
         raise RuntimeError("no TTS provider is configured")
     return TTSFallback(candidates, max_retry_per_tts=2)
@@ -122,6 +123,16 @@ def build_session(cfg: SessionConfig) -> AgentSession:
             turn_detection=inference.TurnDetector(),
             # Allow callers to pause while dictating an address or phone number
             # instead of treating every pause as the end of a turn.
-            endpointing=EndpointingOptions(mode="fixed", min_delay=0.5, max_delay=2.5),
+            endpointing=EndpointingOptions(
+                mode="fixed",
+                min_delay=float(os.getenv("ENDPOINTING_MIN_DELAY", "0.35")),
+                max_delay=float(os.getenv("ENDPOINTING_MAX_DELAY", "2.0")),
+            ),
+            # Start the LLM before the turn is fully committed, then discard if
+            # the caller keeps talking. Hides 200-400 ms on most turns.
+            preemptive_generation=PreemptiveGenerationOptions(
+                enabled=os.getenv("PREEMPTIVE_GENERATION", "true").lower() == "true",
+                preemptive_tts=True,
+            ),
         ),
     )

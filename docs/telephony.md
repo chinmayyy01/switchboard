@@ -89,8 +89,8 @@ lk agent create --region ap-south
 
 ### Browser test call
 
-Open `/console/livekit` after starting the Go service and the agent. The console
-requests a room token from `GET /api/livekit/token?tenant=<id>`. The token embeds
+Open `/console?tab=test`, choose **WebRTC (LiveKit)**, and start a call. The
+console requests a room token from `GET /api/livekit/token?tenant=<id>`. The token embeds
 `roomConfig.agents` with the agent name and `{tenant_id, call_id}` metadata, so
 LiveKit dispatches the agent when the room is created. No separate dispatch call
 is needed.

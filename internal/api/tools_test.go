@@ -206,3 +206,21 @@ func TestSpokenPhoneUsesIndianFormat(t *testing.T) {
 		t.Fatalf("spokenPhone = %q", got)
 	}
 }
+
+func TestValidIndianPhoneAcceptsCommonFormats(t *testing.T) {
+	cases := map[string]string{
+		"6202416257":      "6202416257",
+		"(620) 241-6257":  "6202416257",
+		"+91 62024 16257": "6202416257",
+		"91-62024-16257":  "6202416257",
+	}
+	for input, want := range cases {
+		got, ok := validIndianPhone(input)
+		if !ok || got != want {
+			t.Fatalf("%q -> %q (%v), want %q", input, got, ok, want)
+		}
+	}
+	if _, ok := validIndianPhone("12345"); ok {
+		t.Fatal("short number accepted")
+	}
+}
