@@ -35,22 +35,32 @@ BASE_KEYTERMS = [
 
 def _llms():
     candidates = []
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if gemini_key:
+        from livekit.plugins import google
+
+        options = {
+            "model": os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
+            "api_key": gemini_key,
+        }
+        level = os.getenv("GEMINI_THINKING_LEVEL", "minimal")
+        budget = os.getenv("GEMINI_THINKING_BUDGET", "")
+        if level:
+            options["thinking_config"] = {"thinking_level": level}
+        elif budget:
+            options["thinking_config"] = {"thinking_budget": int(budget)}
+        logger.info("LLM primary: google/%s thinking=%s", options["model"], level or budget)
+        candidates.append(google.LLM(**options))
     if os.getenv("OPENAI_API_KEY"):
+        logger.info("LLM fallback: openai/%s", os.getenv("OPENAI_MODEL", "gpt-4.1-mini"))
         candidates.append(openai.LLM(model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini")))
         candidates.append(
             openai.LLM(model=os.getenv("OPENAI_FALLBACK_MODEL", "gpt-4.1-nano"))
         )
-    if os.getenv("GEMINI_API_KEY"):
-        try:
-            from livekit.plugins import google
-
-            candidates.append(
-                google.LLM(model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
-            )
-        except Exception:
-            logger.warning("Gemini plugin not installed; using OpenAI models only")
     if not candidates:
         raise RuntimeError("no LLM provider is configured")
+    # Sticky keeps the primary until it actually fails, so a recovered primary
+    # does not pull traffic back mid-call.
     return LLMFallback(candidates, attempt_timeout=4.0, sticky=True)
 
 
