@@ -40,6 +40,7 @@ type TokenResponse = {
   token: string;
   room: string;
   tenant_id: string;
+  provider?: string;
 };
 
 export function useLiveKitCall() {
@@ -126,7 +127,7 @@ export function useLiveKitCall() {
   }, []);
 
   const start = useCallback(
-    async (tenant = "rivera") => {
+    async (tenant = "rivera", provider = "default") => {
       if (roomRef.current) return;
       setStatus("connecting");
       setMessage("");
@@ -135,7 +136,7 @@ export function useLiveKitCall() {
       setEvents([]);
       try {
         const response = await fetch(
-          `${API}/api/livekit/token?tenant=${encodeURIComponent(tenant)}`,
+          `${API}/api/livekit/token?tenant=${encodeURIComponent(tenant)}&provider=${encodeURIComponent(provider)}`,
           { credentials: "include" },
         );
         if (!response.ok) {

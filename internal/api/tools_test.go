@@ -186,6 +186,45 @@ func TestAgentToolsBookOnceAndRecordConsent(t *testing.T) {
 		t.Fatalf("consent not persisted as false: %v %v", allowed, err)
 	}
 
+	// A declined transcript stores no text, even if the agent reports a turn.
+	turnBody := []byte(`{"seq":1,"role":"user","text":"my number is 9876543210"}`)
+	turn := toolRequest(t, tools.Turn(), "token-secret", session.Token, turnBody)
+	var turnResult struct {
+		OK       bool `json:"ok"`
+		Recorded bool `json:"recorded"`
+	}
+	if err := json.Unmarshal(turn.Body.Bytes(), &turnResult); err != nil {
+		t.Fatal(err)
+	}
+	if !turnResult.OK || turnResult.Recorded {
+		t.Fatalf("turn stored without transcript consent: %+v", turnResult)
+	}
+
+	// Recording can stay off while transcript consent is granted.
+	consentTranscript := []byte(`{"recording_allowed":false,"transcript_allowed":true}`)
+	if got := toolRequest(t, tools.Consent(), "token-secret", session.Token, consentTranscript); got.Code != http.StatusOK {
+		t.Fatalf("transcript consent status=%d body=%s", got.Code, got.Body.String())
+	}
+	transcript, err := calls.New(db).TranscriptConsent(ctx, session.CallID)
+	if err != nil || transcript == nil || !*transcript {
+		t.Fatalf("transcript consent not persisted as true: %v %v", transcript, err)
+	}
+	turn = toolRequest(t, tools.Turn(), "token-secret", session.Token, turnBody)
+	if err := json.Unmarshal(turn.Body.Bytes(), &turnResult); err != nil {
+		t.Fatal(err)
+	}
+	if !turnResult.Recorded {
+		t.Fatalf("turn not stored after consent: %s", turn.Body.String())
+	}
+	// Agent retries use the same sequence number and must not duplicate.
+	turn = toolRequest(t, tools.Turn(), "token-secret", session.Token, turnBody)
+	if err := json.Unmarshal(turn.Body.Bytes(), &turnResult); err != nil {
+		t.Fatal(err)
+	}
+	if turnResult.Recorded {
+		t.Fatal("duplicate turn sequence was accepted")
+	}
+
 	unauthorized := toolRequest(t, tools.Book(), "wrong-secret", session.Token, bookBody)
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong token status=%d", unauthorized.Code)

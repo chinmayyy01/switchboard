@@ -40,9 +40,18 @@ Set the environment:
 APP_ENV=production
 APP_ORIGIN=https://voice.example.com
 COOKIE_SECURE=true
-AUTH_DB=data/auth.db
+AUTH_DRIVER=postgres
 AUTH_DISABLED=false
 DATABASE_URL=postgres://switchboard:...@db.example.com:5432/switchboard?sslmode=require
+REDIS_URL=redis://127.0.0.1:6379/0
+TRUSTED_PROXIES=127.0.0.1/32
+PRICING_FILE=/opt/switchboard/config/pricing.json
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=...
+SMTP_PASSWORD=...
+SMTP_FROM=no-reply@voice.example.com
+APP_BASE_URL=https://voice.example.com
 SARVAM_API_KEY=sk_...
 STT_PROVIDER=sarvam
 TTS_PROVIDER=sarvam
@@ -53,8 +62,13 @@ KNOWLEDGE_DIR=/opt/switchboard/data/knowledge
 OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-`AUTH_DISABLED=true` is only for a local preview. It gives every visitor an
-unlimited owner account and will burn Sarvam credits in public.
+`AUTH_DISABLED=true` is ignored outside `APP_ENV=development`; production always
+requires auth. Create the owner before the first deploy with
+`go run ./cmd/account -owner -email you@example.com -password '...' -tenant rivera`.
+
+Add the LiveKit agent settings when the worker runs on the same VM or in Cloud:
+`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `AGENT_API_KEY`, and a
+distinct `AGENT_TOKEN_SECRET`.
 
 ## 3. Install dependencies
 
@@ -103,8 +117,6 @@ cd /opt/switchboard/web
 sudo -u switchboard env \
   NEXT_PUBLIC_SITE_URL=https://voice.example.com \
   NEXT_PUBLIC_API_URL=https://voice.example.com \
-  NEXT_PUBLIC_WS_URL=wss://voice.example.com/ws \
-  NEXT_PUBLIC_SUPERVISOR_WS_URL=wss://voice.example.com/ws/supervisor \
   NEXT_PUBLIC_AI_URL=https://voice.example.com/ai \
   NEXT_PUBLIC_AUTH_DISABLED=false \
   npm run build
@@ -143,10 +155,20 @@ sudo systemctl restart caddy
 
 Caddy obtains TLS automatically. It proxies:
 
-- `/api/*` and `/ws*` to Go on `:8090`
+- `/api/*` to Go on `:8090`
+- `/internal/livekit/*` to Go on `:8090` for signed LiveKit webhooks
 - `/metrics` to Go
 - `/ai/*` to Python on `:8100`
 - everything else to Next on `:3000`
+
+Create a LiveKit Cloud webhook pointing at
+`https://<your-domain>/internal/livekit/webhook` with the same signing API key
+as `LIVEKIT_API_KEY`. Caller ID, call closure, and recording state depend on it.
+Only the `/internal/livekit/*` prefix is public; the agent tool routes remain
+private. If the agent worker runs in LiveKit Cloud rather than on this VM, it
+must reach `/internal/agent/session` and `/internal/tools/*`. Put the worker on
+the same private network as Go, or add explicit Caddy rules for those two
+prefixes and treat `AGENT_API_KEY` as a high-value secret.
 
 ## 7. Smoke test
 
@@ -171,8 +193,17 @@ address.
 
 ## Notes
 
-- Bookings and staff are stored in PostgreSQL. Call transcripts remain in `data/`.
-- The Go call limiter and auth sessions are single-instance. Use one Go process,
-  or move quotas and sessions to Redis/Postgres before scaling out.
-- Set `AUTH_DISABLED=false` for any public deployment.
-- SMS and telephony are not part of this version.
+- Bookings, staff, calls, transcript turns, labels, recordings metadata, usage,
+  accounts, and sessions are stored in PostgreSQL.
+- Set `REDIS_URL` when running more than one Go process; call and login limits
+  are shared through Redis. Without it they are per process.
+- Run `make retention` (or `cmd/retention`) on a schedule to enforce the 30-day
+  audio and 180-day transcript policy.
+- Self-serve signup creates a new tenant under `tenants/<id>/`. Ensure
+  `/opt/switchboard/tenants` is writable by the service user and backed up.
+  Multiple Go instances need a shared volume or tenant config moved to a
+  database/object store.
+- Recording requires `RECORDING_S3_*` and `RECORDING_S3_BUCKET`; without it the
+  agent tells the caller recording is unavailable.
+- A real phone number still needs carrier KYC and the reviewed LiveKit SIP
+  plans. SMS is not part of this version.

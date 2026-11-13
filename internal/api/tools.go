@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/chinmay/switchboard/internal/agentauth"
 	"github.com/chinmay/switchboard/internal/ai"
+	"github.com/chinmay/switchboard/internal/billing"
 	"github.com/chinmay/switchboard/internal/calls"
 	"github.com/chinmay/switchboard/internal/jobs"
+	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/tenant"
 )
 
@@ -23,17 +26,22 @@ type Tools struct {
 	Calls       *calls.Store
 	AI          *ai.Client
 	Tenants     *tenant.Registry
+	Billing     *billing.Service
 	AgentKey    string
 	TokenSecret string
 }
 
 type agentSessionRequest struct {
-	TenantID   string `json:"tenant_id"`
-	CallID     string `json:"call_id"`
-	Direction  string `json:"direction"`
-	FromNumber string `json:"from_number"`
-	ToNumber   string `json:"to_number"`
-	RoomName   string `json:"room_name"`
+	TenantID     string `json:"tenant_id"`
+	CallID       string `json:"call_id"`
+	Direction    string `json:"direction"`
+	FromNumber   string `json:"from_number"`
+	ToNumber     string `json:"to_number"`
+	SIPCallID    string `json:"sip_call_id"`
+	Source       string `json:"source"`
+	AgentVersion string `json:"agent_version"`
+	Provider     string `json:"provider"`
+	RoomName     string `json:"room_name"`
 }
 
 type agentSessionResponse struct {
@@ -48,6 +56,8 @@ type agentSessionResponse struct {
 		Disclosure    string         `json:"disclosure"`
 		ManagerNumber string         `json:"manager_number,omitempty"`
 	} `json:"tenant"`
+	Budget   billing.Decision `json:"budget"`
+	Provider string           `json:"provider"`
 }
 
 // AgentSession exchanges the agent bootstrap key for a short-lived per-call
@@ -71,6 +81,7 @@ func (t *Tools) AgentSession() http.HandlerFunc {
 		}
 		cfg, ok := t.Tenants.Get(body.TenantID)
 		if !ok {
+			metrics.BootstrapFailure()
 			http.Error(w, "unknown tenant", http.StatusNotFound)
 			return
 		}
@@ -80,17 +91,23 @@ func (t *Tools) AgentSession() http.HandlerFunc {
 			Direction:    firstNonEmpty(body.Direction, "inbound"),
 			FromNumber:   body.FromNumber,
 			ToNumber:     body.ToNumber,
+			SIPCallID:    body.SIPCallID,
+			Source:       body.Source,
+			AgentVersion: body.AgentVersion,
 			RoomName:     body.RoomName,
 			ManagerPhone: cfg.ManagerPhone(),
 		}); err != nil {
+			metrics.BootstrapFailure()
 			http.Error(w, "could not start call record", http.StatusInternalServerError)
 			return
 		}
+		metrics.LiveKitCallStarted(body.Source)
 		token, err := agentauth.Mint(t.TokenSecret, agentauth.Claims{
 			TenantID: body.TenantID,
 			CallID:   body.CallID,
 		})
 		if err != nil {
+			metrics.BootstrapFailure()
 			http.Error(w, "could not mint agent token", http.StatusInternalServerError)
 			return
 		}
@@ -101,7 +118,20 @@ func (t *Tools) AgentSession() http.HandlerFunc {
 		resp.Tenant.Windows = cfg.Windows
 		resp.Tenant.Persona = cfg.Persona
 		resp.Tenant.ManagerNumber = cfg.ManagerPhone()
+		resp.Provider = strings.ToLower(strings.TrimSpace(body.Provider))
+		if resp.Provider != "sarvam" {
+			resp.Provider = "default"
+		}
 		resp.Tenant.Disclosure = disclosure(cfg)
+		resp.Budget = billing.Decision{Allowed: true, Action: "transfer", Currency: "INR"}
+		if t.Billing != nil {
+			decision, err := t.Billing.Check(r.Context(), cfg.ID)
+			if err != nil {
+				slog.Error("budget check", "tenant", cfg.ID, "err", err)
+			} else {
+				resp.Budget = decision
+			}
+		}
 		writeJSON(w, resp)
 	}
 }
@@ -533,17 +563,125 @@ func (t *Tools) Consent() http.HandlerFunc {
 			return
 		}
 		var body struct {
-			Allowed bool `json:"allowed"`
+			Allowed           *bool  `json:"allowed"`
+			RecordingAllowed  *bool  `json:"recording_allowed"`
+			TranscriptAllowed *bool  `json:"transcript_allowed"`
+			Language          string `json:"language"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			toolError(w, "invalid_request", "I didn't catch that.")
 			return
 		}
-		if err := t.Calls.SetConsent(r.Context(), claims.CallID, body.Allowed); err != nil {
+		recording := body.RecordingAllowed
+		if recording == nil {
+			recording = body.Allowed
+		}
+		if recording == nil {
+			toolError(w, "invalid_request", "I need the caller's recording choice.")
+			return
+		}
+		transcript := body.TranscriptAllowed
+		if transcript == nil {
+			transcript = recording
+		}
+		if err := t.Calls.SetConsent(r.Context(), claims.CallID, *recording, *transcript, body.Language); err != nil {
 			toolError(w, "store_unavailable", "I can't save that right now.")
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "allowed": body.Allowed})
+		writeJSON(w, map[string]any{
+			"ok":                 true,
+			"recording_allowed":  *recording,
+			"transcript_allowed": *transcript,
+		})
+	}
+}
+
+// Turn stores one transcript turn. Consent is enforced inside the INSERT, so a
+// stale or buggy agent cannot persist text for a call that declined it.
+func (t *Tools) Turn() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := agentauth.FromContext(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Seq       int    `json:"seq"`
+			Role      string `json:"role"`
+			Text      string `json:"text"`
+			LatencyMS int    `json:"latency_ms"`
+			ToolName  string `json:"tool_name"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			toolError(w, "invalid_request", "invalid turn")
+			return
+		}
+		if body.Seq <= 0 {
+			toolError(w, "invalid_request", "invalid turn sequence")
+			return
+		}
+		if body.Role != "user" && body.Role != "assistant" {
+			toolError(w, "invalid_request", "invalid turn role")
+			return
+		}
+		text := strings.TrimSpace(body.Text)
+		if text == "" {
+			writeJSON(w, map[string]any{"ok": true, "recorded": false})
+			return
+		}
+		if len([]rune(text)) > 8000 {
+			text = string([]rune(text)[:8000])
+		}
+		recorded, err := t.Calls.AppendTurn(r.Context(), calls.Turn{
+			CallID:    claims.CallID,
+			TenantID:  claims.TenantID,
+			Seq:       body.Seq,
+			Role:      body.Role,
+			Text:      text,
+			LatencyMS: body.LatencyMS,
+			ToolName:  body.ToolName,
+		})
+		if err != nil {
+			toolError(w, "store_unavailable", "I can't save that right now.")
+			return
+		}
+		metrics.TranscriptTurn(recorded)
+		writeJSON(w, map[string]any{"ok": true, "recorded": recorded})
+	}
+}
+
+// Usage records the agent's cumulative model usage at call end. The agent sends
+// units only; the Go service owns pricing and the ledger.
+func (t *Tools) Usage() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := agentauth.FromContext(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if t.Billing == nil {
+			toolError(w, "billing_unavailable", "usage is not configured")
+			return
+		}
+		var body struct {
+			Items []billing.UsageItem `json:"items"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			toolError(w, "invalid_request", "invalid usage")
+			return
+		}
+		if len(body.Items) > 100 {
+			toolError(w, "invalid_request", "too many usage items")
+			return
+		}
+		cost, err := t.Billing.Record(r.Context(), claims.TenantID, claims.CallID, body.Items)
+		if err != nil {
+			toolError(w, "store_unavailable", "I can't save usage right now.")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "cost_minor": cost})
 	}
 }
 
@@ -594,9 +732,13 @@ func (t *Tools) End() http.HandlerFunc {
 			toolError(w, "invalid_request", "invalid outcome")
 			return
 		}
-		if err := t.Calls.End(r.Context(), claims.CallID, body.Outcome); err != nil {
+		closed, err := t.Calls.End(r.Context(), claims.CallID, body.Outcome)
+		if err != nil {
 			toolError(w, "store_unavailable", "I can't update that call right now.")
 			return
+		}
+		if closed {
+			metrics.LiveKitCallEnded(body.Outcome)
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	}

@@ -16,6 +16,11 @@ class SessionConfig:
     manager_number: str = ""
     persona: dict[str, Any] = field(default_factory=dict)
     token: str = ""
+    provider: str = "default"
+    budget_allowed: bool = True
+    budget_action: str = "transfer"
+    budget_currency: str = "INR"
+    budget_remaining_minor: int = 0
 
     @property
     def agent_name(self) -> str:
@@ -45,6 +50,7 @@ def settings() -> Settings:
 
 def session_config(payload: dict[str, Any], call_id: str) -> SessionConfig:
     tenant = payload.get("tenant") or {}
+    budget = payload.get("budget") or {}
     return SessionConfig(
         call_id=payload.get("call_id") or call_id,
         tenant_id=str(tenant.get("id") or ""),
@@ -55,4 +61,9 @@ def session_config(payload: dict[str, Any], call_id: str) -> SessionConfig:
         manager_number=str(tenant.get("manager_number") or ""),
         persona=dict(tenant.get("persona") or {}),
         token=str(payload.get("token") or ""),
+        provider=str(payload.get("provider") or "default"),
+        budget_allowed=bool(budget.get("allowed", True)),
+        budget_action=str(budget.get("action") or "transfer"),
+        budget_currency=str(budget.get("currency") or "INR"),
+        budget_remaining_minor=int(budget.get("remaining_minor") or 0),
     )

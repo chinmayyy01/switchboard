@@ -39,6 +39,10 @@ func LiveKitToken(tenants *tenant.Registry) http.HandlerFunc {
 			http.Error(w, "unknown tenant", http.StatusNotFound)
 			return
 		}
+		provider := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider")))
+		if provider != "sarvam" {
+			provider = "default"
+		}
 		room := strings.TrimSpace(r.URL.Query().Get("room"))
 		if room == "" {
 			room = "console-" + account.ID + "-" + time.Now().Format("150405")
@@ -48,6 +52,7 @@ func LiveKitToken(tenants *tenant.Registry) http.HandlerFunc {
 			"call_id":    "browser-" + room,
 			"direction":  "browser",
 			"account_id": account.ID,
+			"provider":   provider,
 		})
 		agentName := os.Getenv("LIVEKIT_AGENT_NAME")
 		if agentName == "" {
@@ -83,6 +88,7 @@ func LiveKitToken(tenants *tenant.Registry) http.HandlerFunc {
 			"token":     token,
 			"room":      room,
 			"tenant_id": cfg.ID,
+			"provider":  provider,
 		})
 	}
 }

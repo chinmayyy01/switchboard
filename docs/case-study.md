@@ -1,8 +1,8 @@
 # Switchboard: an AI voice receptionist for home services
 
-A working browser-based voice agent that answers a call, books a real visit
-against staff availability, answers policy from tenant documents, and holds the
-line for a human when the call needs one.
+A working browser and SIP voice agent that answers a call, books a real visit
+against staff availability, answers policy from tenant documents, and hands the
+line to a human when the call needs one.
 
 This is the portfolio case study. The runnable project is in the repository
 root: see [README](../README.md).
@@ -25,29 +25,28 @@ A useful receptionist has to do more than transcribe speech. It has to:
 
 ## What I built
 
-A browser caller talks to a Go realtime service. Audio is streamed as 16 kHz
-mono PCM in 20 ms frames. The Go service runs energy VAD and the conversation
-state; the Python service handles Sarvam speech and retrieval; the browser
-console shows the live transcript, booking card, latency, KPIs, and supervisor
-handoff.
+A caller reaches a LiveKit room over SIP or from the browser console. A Python
+agent handles speech and model calls; Go owns tools, consent, pricing, and
+persistence. The console shows the live transcript, booking card, latency, KPIs,
+and supervisor handoff. The same agent answers phone and browser calls.
 
 ```mermaid
 flowchart LR
-  Browser["Next.js caller and console"] <-->|"PCM + JSON"| Go["Go realtime"]
-  Go <-->|"tools and state"| Store["Jobs, staff, tenants"]
-  Go <-->|"chat + tools"| Sarvam["Sarvam 105B"]
-  Go <-->|"HTTP"| AI["Python AI"]
-  AI <-->|"STT + TTS"| Sarvam
-  AI <-->|"embeddings, vision"| Ollama["Ollama"]
-  Supervisor["Supervisor browser"] <-->|"audio bridge"| Go
+  Phone["Phone caller"] -->|"SIP"| LK["LiveKit Cloud"]
+  Browser["Next.js caller and console"] <-->|"WebRTC"| LK
+  LK <-->|"audio + transcript"| Agent["Python agent"]
+  Agent <-->|"tools, state, consent"| Go["Go API"]
+  Go <-->|"jobs, staff, calls, turns, usage"| PG[("PostgreSQL")]
+  Agent <-->|"STT / LLM / TTS"| Models["Deepgram, Gemini, Cartesia"]
+  Supervisor["Supervisor browser"] <-->|"LiveKit room"| LK
 ```
 
 ### Conversation
 
-- Sarvam Saaras v4 for speech to text, with Deepgram and local Whisper fallbacks.
-- Sarvam 105B with tool calling for the booking flow.
-- Sarvam Bulbul v3 at 22.05 kHz, sentence by sentence, with barge in.
-- Short backchannels while the brain thinks.
+- Deepgram for streaming speech to text, with a fallback model.
+- Gemini or OpenAI with tool calling for the booking flow, behind a fallback adapter.
+- Cartesia or ElevenLabs for streaming TTS, with barge-in.
+- LiveKit's semantic turn detector plus Silero VAD.
 - Hindi and English.
 
 ### Booking
@@ -90,35 +89,36 @@ Prometheus, Grafana, and Jaeger configs are in `deploy/observability`.
 
 ## Decisions and tradeoffs
 
-**Go for realtime, Python for models.** Go owns the socket, VAD, state, tools,
-and policy. Python owns speech, retrieval, and vision. The split keeps audio
-latency work away from Python model startup and lets each side be tested alone.
+**LiveKit for media, Go for effects, Python for models.** LiveKit owns transport,
+rooms, SIP, and turn detection. Go owns pricing, consent, booking, and every
+side effect. Python owns speech and model calls. The split keeps credentials and
+business state out of the model process and lets each side be tested alone.
 
-**Server-side VAD.** Browser VAD was inconsistent across microphones. Energy
-VAD with a 300 ms pre-roll and a 600 ms hangover made turns predictable.
+**The model proposes, code verifies.** The LLM does not write directly to the
+job store. A hallucinated slot is rejected; a full slot returns alternatives;
+the booking requires a signed confirmation token after a read-back.
 
-**Streamed sentence TTS.** Waiting for a full reply before speaking felt slow.
-Streaming sentence by sentence brought first audio below a second on the live
-Sarvam path, at the cost of more TTS requests.
+**Two consents, not one.** Audio recording and transcript storage are separate
+choices with a versioned disclosure. Declining audio does not block service, and
+the consent check lives inside the SQL insert, not in the prompt.
 
-**Code validates every tool action.** The LLM does not write directly to the job
-store. A hallucinated slot is rejected; a full slot returns alternatives.
+**Postgres for call truth.** Calls, turns, labels, recordings, usage, accounts,
+and sessions live in PostgreSQL. LiveKit webhooks are authoritative for call
+end; a reaper closes anything missed.
 
-**Fake staff, real constraints.** Staff skills, weekdays, shifts, and busy slots
-are real enough to exercise assignment and release. Tenant data is fictional.
+**Recording is opt-in and short-lived.** Egress starts only after an explicit
+yes, stores an object key, and is deleted after 30 days. Playback is a
+presigned URL; the bucket is private.
 
-**Auth is disabled for the local preview.** The owner and 2-call trial code is
-present, but the running preview uses `AUTH_DISABLED=true` so it can be opened
-without a login. This must be off before a public deployment.
-
-**Separate durable business data from demo transcripts.** Jobs and staff persist
-in PostgreSQL. Call records append to `data/calls.jsonl`; review labels live in
-`data/labels.json`.
+**Budgets are enforced, not dashboarded.** A per-tenant ledger and price table
+feed a pre-call check. At the cap the agent transfers to a human; a hard call
+duration stops runaway calls.
 
 ## Measured results
 
-Measured on a Mac against the local stack. These are demo numbers, not a
-benchmark.
+Measured on a Mac against the local stack. The table below is from the earlier
+browser pipeline; the LiveKit phone path has not been measured against a real
+carrier yet. These are demo numbers, not a benchmark.
 
 | Area | Result |
 | --- | --- |
@@ -129,7 +129,6 @@ benchmark.
 | Grounding | grounded 0.944, abstention 0.833 on 18 questions |
 | First audio | 0.65 s to 1.3 s on the earlier live smoke; 0.84 s to 3.9 s in the latest run |
 | Local fallback | p95 1.50 s at 5 calls, 2.83 s at 10 calls on CPU Whisper and Piper |
-| Load | `make load` runs 50 synthetic callers; the older 500-caller result has no checked-in report |
 | Usage per 9-turn call | about 23k prompt tokens, 396 completion tokens |
 
 These are one-off local demo measurements, not a reproducible benchmark. The
@@ -140,13 +139,12 @@ to be rerun before being treated as current performance evidence.
 
 ## What I would build next
 
-1. Telephony: choose a provider and region, add inbound numbers, and bridge
-   provider audio into the existing realtime call flow.
-2. Phone handoff: transfer to a real teammate with ring timeout and fallback.
-3. Onboarding and access control: connect a business, manage account roles, and
-   configure consent and data retention.
+1. Provision an Indian DID and complete carrier KYC, then run the real-call gate.
+2. Route alerts through Alertmanager with on-call and an incident runbook.
+3. SSO, billing, and enterprise identity.
 4. SMS confirmation and reminders after a booking.
-5. Per-tenant cost budgets, latency SLOs, alerts, and an incident runbook.
+5. Label real calls and replace authored-scenario quality scores.
+6. A speech-to-speech model experiment against the 1.2 s p50 SLO.
 
 ## Links
 

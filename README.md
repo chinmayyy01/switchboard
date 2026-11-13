@@ -8,11 +8,13 @@ Switchboard handles browser-based voice calls, books visits against its own staf
 
 ![Switchboard landing page](docs/screenshots/landing.png)
 
-> **Status:** portfolio demo snapshot.
-> Browser only. No telephony, recordings, or production data.
-> Auth is temporarily disabled in the local preview with `AUTH_DISABLED=true`; the owner/trial policy remains in code and can be re-enabled.
-> Bookings and staff schedules persist in PostgreSQL. Auth uses SQLite; call records and labels remain local JSON files.
-> Production hardening is tracked separately from this demo snapshot.
+> **Status:** portfolio demo with a phone-ready agent path.
+> Browser and LiveKit SIP calls are supported. No public number is provisioned in this snapshot.
+> Auth is enabled by default; accounts and sessions live in PostgreSQL.
+> Bookings, staff, calls, transcript turns, labels, recording metadata, and usage live in PostgreSQL.
+> Recording requires `RECORDING_S3_*`; without it the agent tells the caller recording is unavailable.
+> A real number still needs carrier KYC and the reviewed LiveKit SIP plans in `docs/telephony.md`.
+> Production hardening is tracked in `docs/production-phases.md`.
 
 ## Contents
 
@@ -21,8 +23,8 @@ Switchboard handles browser-based voice calls, books visits against its own staf
 - [Screenshots](#screenshots)
 - [Quick start](#quick-start)
 - [Architecture](#architecture)
-+- [LiveKit agent and telephony](docs/telephony.md)
- - [Measurements](#measurements)
+- [LiveKit agent and telephony](docs/telephony.md)
+- [Measurements](#measurements)
 - [Configuration](#configuration)
 - [Commands](#commands)
 - [Project layout](#project-layout)
@@ -33,14 +35,15 @@ Switchboard handles browser-based voice calls, books visits against its own staf
 
 ## What it does
 
-- **Natural voice calls.** Sarvam Bulbul at 22.05 kHz, sentence by sentence TTS, barge in, and short backchannels such as "mm-hmm" and "okay".
+- **Natural voice calls.** LiveKit media, Deepgram streaming STT, Gemini or OpenAI for the reply, Cartesia or ElevenLabs for TTS, with barge-in and a semantic turn detector.
 - **Durable demo bookings.** The agent checks staff availability, assigns a qualified technician, and stores the visit in PostgreSQL. It is not connected to an external calendar or field-service system.
 - **Alternatives when full.** If no technician is available, the tool returns specific dates and windows and the agent asks the caller to choose.
 - **Grounded policy.** Hours, pricing, warranty, and service area are answered from tenant documents with citations; it refuses when the answer is not grounded.
-- **Warm handoff.** Emergencies and human requests hold the call live for a supervisor instead of hanging up. The supervisor joins a browser audio bridge with the transcript.
-- **Photo triage.** A caller can upload a photo; local vision (`qwen2.5vl`) writes a short description into the conversation.
+- **Warm handoff.** Emergencies and human requests transfer to the manager or hand the LiveKit room to a signed-in supervisor with the transcript.
+- **Photo triage.** A caller can upload a photo; local vision writes a description into the same LiveKit conversation.
+- **Consent and retention.** Audio recording and transcript storage are separate, versioned choices. Audio is deleted after 30 days and transcript turns after 180 by default.
 - **Tenant aware.** Services, docs, staff, and the console are separated per tenant.
-- **Measured.** Escalation, booking, retrieval, latency, and usage metrics are collected and scored.
+- **Budget aware.** A per-tenant usage ledger and price table feed a pre-call budget check and a hard call duration.
 
 ## Screenshots
 
@@ -66,12 +69,15 @@ Switchboard handles browser-based voice calls, books visits against its own staf
 
 - Go 1.26+
 - Node.js 20+
-- Python 3.12
+- Python 3.12 (the agent needs 3.12 or 3.13)
 - Ollama
 - PostgreSQL 16+ or Docker for the local database
+- Redis (optional locally, required for multiple Go instances)
 - Make
-- A Sarvam API key, recommended
-- Optional: OpenAI or Deepgram keys
+- LiveKit Cloud project and API keys
+- Deepgram key (STT)
+- Gemini or OpenAI key (LLM)
+- Cartesia or ElevenLabs key (TTS)
 
 ### 1. Environment
 
@@ -82,36 +88,89 @@ cp .env.example .env
 Set at least:
 
 ```bash
-SARVAM_API_KEY=sk_...
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+DEEPGRAM_API_KEY=...
+GEMINI_API_KEY=...          # or OPENAI_API_KEY
+CARTESIA_API_KEY=...        # or ELEVEN_API_KEY
+AGENT_API_KEY=...
+AGENT_TOKEN_SECRET=...      # must differ from AGENT_API_KEY
 ```
 
-The example environment sets `AUTH_DISABLED=false`. This local preview sets `AUTH_DISABLED=true` in `.env`, so the console opens without sign-in. Set it back to `false` to use accounts again.
+`AUTH_DRIVER=postgres` is the default. Create the owner before signing in:
 
-Without a key, set `STT_PROVIDER=local` and `TTS_PROVIDER=piper` to use Whisper and Piper, and the brain falls back to the hybrid rule state machine. The intended demo path is Sarvam for speech and chat, with Ollama for embeddings and vision.
+```bash
+go run ./cmd/account -owner -email you@example.com -password '...' -tenant rivera
+```
 
-### 2. Start PostgreSQL
+The browser console uses LiveKit. The Python AI service is still needed for
+policy retrieval and vision, and Ollama supplies embeddings. Local Whisper/Piper
+are a fallback for the legacy inference path, not the LiveKit agent.
 
-The local compose file creates a development database matching `DATABASE_URL` in `.env.example`:
+### 2. Start PostgreSQL and Redis
+
+The local compose file creates a development database matching `DATABASE_URL`
+in `.env.example`, plus Redis on `:6379`:
 
 ```bash
 docker compose -f deploy/development/postgres-compose.yml up -d
 ```
 
+Set `REDIS_URL=redis://127.0.0.1:6379/0` to use the shared limiter. Without it,
+the Go service logs a warning and keeps call/login limits in memory.
+
 Switchboard applies its booking and staff schema migrations on startup. Existing tenant staff files seed the database once; future changes belong in the Team screen.
 
-### 3. Accounts for when auth is enabled
+### 3. Accounts, workspaces, and team access
+
+New businesses can create a workspace at:
+
+```text
+http://localhost:3000/signup
+```
+
+Signup creates a new tenant under `tenants/<id>/config.json`, an owner account,
+an empty staff list, and sends a verification email. After verifying, the owner
+lands in their own console.
+
+To create an owner in an existing tenant (useful for local testing or the
+platform operator):
 
 ```bash
 go run ./cmd/account -owner -email you@example.com -password 'change-me' -tenant rivera
 ```
 
-`-prune` deletes every non-owner account and session. Create a standard account with 2 free calls:
+To create a teammate directly:
 
 ```bash
-go run ./cmd/account -email teammate@example.com -password 'change-me' -tenant rivera
+go run ./cmd/account \
+  -email teammate@example.com -password 'change-me' \
+  -tenant rivera -role viewer -name 'Teammate'
 ```
 
-The owner can use every tenant and has no call limit. Every other account is limited to 2 total calls and one active call at a time. These steps are only needed when `AUTH_DISABLED=false`.
+In normal use, a workspace owner invites teammates from **Console → Access**.
+The invitee opens the emailed link, sets a name and password, verifies their
+email, and then signs in. Roles:
+
+- **Owner** — owns the workspace: all settings, team access, unlimited calls.
+- **Manager** — staff, calls, labels, and reports; no team access.
+- **Viewer** — read-only console access and 2 lifetime calls.
+
+Password reset is available from the login page. `-prune` deletes every
+non-owner account and session in the database.
+
+In development, without `SMTP_HOST`, invite/verify/reset links are written to
+the Go log and returned in the API response so you can test the flow locally.
+Production refuses to start without SMTP.
+
+New tenant configs are files under `tenants/`. In a multi-instance deployment,
+that directory must be shared/persistent, or move tenant config into object
+storage or PostgreSQL.
+
+A new workspace starts with generic services and an empty staff list. Add
+technicians in **Console → Team**, then add policy documents under
+`tenants/<id>/docs` and run the ingest command for that tenant.
 
 ### 4. Install the web app
 
@@ -191,10 +250,13 @@ Open:
 
 - Landing: http://localhost:3000
 - Console: http://localhost:3000/console
-- Test call: http://localhost:3000/console?tab=test (choose WebRTC or the legacy transport)
+- Test call: http://localhost:3000/console?tab=test (LiveKit WebRTC)
 - Sign in, when auth is enabled: http://localhost:3000/login
 
-With auth disabled, open the console and start a call. With auth enabled, sign in with the owner or a trial account. Allow the microphone, use headphones, and press **Start call**. The AI service loads Whisper and Piper at startup; a local model downloads on first run if it is not cached.
+With auth enabled, sign in with the owner or a teammate account. Allow the
+microphone, use headphones, and press **Start browser call**. The **Voice
+stack** selector chooses either the default stack (Deepgram + Gemini/OpenAI +
+Cartesia/ElevenLabs) or Sarvam (Saaras + 105B + Bulbul).
 
 ### 10. Check
 
@@ -208,43 +270,55 @@ Runs Go build, vet, and tests plus the web type check.
 
 ```mermaid
 flowchart LR
-  Browser["Next.js landing and console"] <-->|"16 kHz PCM + JSON events"| Go["Go realtime :8090"]
-  Go <-->|"HTTP"| AI["Python AI :8100"]
-  Go <-->|"bookings, staff, availability"| PG[("PostgreSQL")]
+  Phone["Phone caller"] -->|"SIP"| LK["LiveKit Cloud"]
+  Browser["Next.js landing and console"] <-->|"WebRTC"| LK
+  LK <-->|"audio + transcription"| Agent["Python agent :8080"]
+  Agent <-->|"tools, consent, usage"| Go["Go API :8090"]
+  Go <-->|"bookings, staff, calls, turns, auth"| PG[("PostgreSQL")]
   Go <-->|"tenant config + policy docs"| Tenants["Tenant files"]
-  Go <-->|"chat + tools"| Sarvam["Sarvam 105B"]
-  AI <-->|"STT + TTS"| Sarvam
-  AI <-->|"embeddings + vision"| Ollama["Ollama"]
+  Agent <-->|"STT / LLM / TTS"| Models["Deepgram, Gemini/OpenAI, Cartesia/ElevenLabs"]
+  Agent <-->|"embeddings + vision"| Ollama["Ollama / Python AI :8100"]
   Go -->|"metrics and traces"| Obs["Prometheus, Grafana, OTel"]
-  Supervisor["Supervisor browser"] <-->|"warm transfer bridge"| Go
+  Supervisor["Supervisor browser"] <-->|"LiveKit room"| LK
 ```
 
 ### Call flow
 
-1. The browser streams 16 kHz mono PCM in 20 ms frames.
-2. Energy VAD with a 300 ms pre-roll finds the end of the caller's turn.
-3. The AI service transcribes the utterance with Sarvam Saaras, Deepgram, or local Whisper.
-4. The brain runs with tools: check service, save address, check staff availability, set a window, save a phone number, book, reschedule, cancel, or look up policy.
+1. A caller joins through LiveKit SIP, or the browser opens a LiveKit room from the console.
+2. The agent waits for the participant, reads `sip.phoneNumber` / `sip.trunkPhoneNumber` when present, and bootstraps the call in Go.
+3. Streaming STT transcribes the utterance; turn detection combines LiveKit's semantic detector with Silero VAD.
+4. The LLM runs with tools: check service, save address, check staff availability, set a window, save a phone number, book, reschedule, cancel, or look up policy.
 5. Policy questions are retrieved from tenant documents, answered with citations, and refused when ungrounded.
-6. The reply is split into sentences and synthesized as it is produced.
-7. On escalation, the call is held and flagged; a supervisor can join the live bridge.
-8. Bookings and staff schedules persist in PostgreSQL; call transcripts and outcomes remain in local call storage.
+6. TTS streams the reply; barge-in is enabled.
+7. On escalation, the agent warm-transfers to the manager or hands the room to a signed-in supervisor.
+8. Turns are written incrementally to PostgreSQL. LiveKit webhooks close the call; a reaper catches missed end events.
 
 ### Protocol
 
-One WebSocket per call.
+LiveKit owns media transport. The Go and Python services exchange JSON over HTTP:
 
-- Binary frames: 16 kHz mono Int16 PCM, 320 samples per 20 ms frame.
-- Text frames: JSON control and events such as `call.start`, `interrupt`, `stt.final`, `agent.text`, `tool.call`, `agent.speaking`, `agent.done`, `latency`, `escalation`, and `call.end`.
-- TTS is returned at 22.05 kHz and played at its native rate.
+- `POST /internal/agent/session` — bootstrap key → per-call token + tenant config + budget decision.
+- `POST /internal/tools/*` — per-call bearer token for booking, policy, consent, turns, usage, and recording state.
+- `POST /internal/livekit/webhook` — signed lifecycle and Egress events.
+- `GET /api/calls/live` and `GET /api/calls/{id}/supervisor-token` — supervisor handoff.
+
+The console receives transcripts on `lk.transcription` and product events on the `switchboard.events` data topic.
 
 ### LiveKit agent and telephony
 
-Real inbound calls run through LiveKit Cloud and a Python agent worker in `agent/`. The agent uses Deepgram for STT, OpenAI/Gemini for the LLM, and ElevenLabs for TTS, each behind a fallback adapter. Turn detection combines LiveKit's semantic turn detector with Silero VAD. The agent reads the tenant from SIP job metadata, exchanges its bootstrap key for a per-call token, and calls Go tools for availability, booking, policy, consent, and escalation.
+Real inbound calls run through LiveKit Cloud and the Python agent worker in `agent/`. Phone calls use Deepgram for STT, Gemini or OpenAI for the LLM, and Cartesia or ElevenLabs for TTS, each behind a fallback adapter. Browser WebRTC calls can switch to the Sarvam stack (`saaras:v4`, `sarvam-105b-conversations`, `bulbul:v3`) per call; the selector is in the test-call panel. The agent exchanges its bootstrap key for a per-call token and calls Go tools for availability, booking, policy, consent, turns, usage, and escalation.
 
-Plivo is the primary SIP carrier. `cmd/sip-setup` writes reviewed LiveKit SIP plans for the operator to apply with `lk`; nothing is purchased automatically. Exotel sits behind the same `telephony.Provider` interface but is intentionally unimplemented until its inbound routing, KYC, and REFER support are confirmed. See [docs/telephony.md](docs/telephony.md).
+Plivo is the reference SIP carrier. `cmd/sip-setup` writes reviewed LiveKit SIP plans for the operator to apply with `lk`; nothing is purchased automatically. Any SIP carrier works because the agent reads generic SIP attributes; Exotel remains a stub in `internal/telephony`. See [docs/telephony.md](docs/telephony.md).
 
-LiveKit Cloud audio and transcript recording stay off. After the disclosure, the agent records the caller's choice; only an explicit yes starts an audio-only Egress recording to the configured India bucket. Declining or being unclear leaves recording off, and only the consent decision, booking, and minimal call metadata are stored.
+LiveKit Cloud's built-in audio/transcript recording stays off. After the disclosure, the agent stores the caller's recording and transcript choices separately. Audio recording starts only on an explicit yes, goes to the configured India bucket, and is stopped at call end. Declining or being unclear leaves recording off.
+
+### Recording and retention
+
+- Audio is two-channel Egress OGG written to `RECORDING_S3_*` with an object key stored in `call_recordings`.
+- `egress_ended` is authoritative for status and the object key.
+- Playback uses a 10-minute presigned URL; the bucket stays private.
+- `make retention` deletes audio after `RECORDING_RETENTION_DAYS` (30) and transcript turns after `TRANSCRIPT_RETENTION_DAYS` (180).
+- Owner-only `DELETE /api/calls/{id}/recording` removes the object and marks the row deleted.
 
 ### Staff and availability
 
@@ -267,7 +341,9 @@ tenants/acme/
 
 ## Measurements
 
-Measured on this Mac on the live demo. These are demo numbers, not a benchmark.
+Measured on this Mac. The table below is from the earlier browser pipeline; the
+LiveKit phone path has not been measured against a real carrier yet. These are
+demo numbers, not a benchmark.
 
 | Area | Result |
 | --- | --- |
@@ -275,13 +351,15 @@ Measured on this Mac on the live demo. These are demo numbers, not a benchmark.
 | Escalation | precision 0.909, recall 0.909 on 22 hand-authored scenarios; not a labeled real-call sample |
 | Retrieval | recall@1 1.00, recall@3 1.00, MRR 1.00 on 18 questions |
 | Grounding | grounded 0.944, abstention 0.833 on 18 questions |
-| First audio | 0.65 s to 1.3 s server side on the Sarvam smoke call |
+| First audio | 0.65 s to 1.3 s server side on the earlier Sarvam smoke call |
 | Local fallback p95 | 1.50 s at 5 calls, 2.83 s at 10 calls, Whisper base and Piper on CPU |
-| Load | `make load` runs 50 synthetic callers; the earlier 500-caller figure is not reproducible from a checked-in report |
 | Usage per 9 turn call | about 20.8k prompt tokens, 415 completion tokens, 920 TTS characters, 24.7 s STT |
 
-Cost depends on current Sarvam rates. Usage is measured; a rupee cost is not calculated in this demo.
-`make eval` reproduces the booking, 22-scenario handoff, and 18-question RAG results using the local tenant corpus. Latency and usage are one-off smoke measurements. `cmd/report` currently has no labeled-call data to reproduce a real-call escalation score.
+The LiveKit path writes usage to `tenant_usage` and prices it with
+`config/pricing.json`; replace those sample rates with your provider rates.
+`make eval` reproduces the booking, 22-scenario handoff, and 18-question RAG
+results. `cmd/report` reads labels from PostgreSQL, but there is still no
+labeled real-call set.
 
 ## Configuration
 
@@ -304,25 +382,38 @@ Cost depends on current Sarvam rates. Usage is measured; a rupee cost is not cal
 | `OLLAMA_MODEL` | Local fallback model | `qwen3:1.7b` |
 | `VISION_MODEL` | Local vision model | `qwen2.5vl:3b` |
 | `INFERENCE_URL` | Python AI service | `http://127.0.0.1:8100` |
-| `NEXT_PUBLIC_WS_URL` | Realtime WebSocket | `ws://localhost:8090/ws` |
 | `NEXT_PUBLIC_API_URL` | Go API | `http://localhost:8090` |
 | `NEXT_PUBLIC_AI_URL` | Python AI | `http://127.0.0.1:8100` |
 | `NEXT_PUBLIC_SITE_URL` | Canonical and social metadata | `http://localhost:3000` |
-| `AUTH_DB` | SQLite accounts and sessions | `data/auth.db` |
-| `DATABASE_URL` | PostgreSQL bookings, employees, and schedules | required |
-| `AUTH_DISABLED` | Bypass login and use a local owner account | `false` |
+| `AUTH_DRIVER` | `postgres` (default with `DATABASE_URL`) or `sqlite` | `postgres` |
+| `AUTH_DB` | SQLite fallback accounts and sessions | `data/auth.db` |
+| `DATABASE_URL` | PostgreSQL bookings, staff, calls, turns, labels, usage, auth | required |
+| `AUTH_DISABLED` | Local preview bypass; ignored outside development | `false` |
 | `DEV_TENANT` | Tenant used by the local owner when auth is disabled | `rivera` |
 | `NEXT_PUBLIC_AUTH_DISABLED` | Show the local-preview banner and copy | `false` |
-| `APP_ORIGIN` | Allowed browser origin for cookies and CORS | `http://localhost:3000,http://127.0.0.1:3000` |
+| `TRUSTED_PROXIES` | Peers allowed to set `X-Forwarded-For` | `127.0.0.1/32,::1/128` |
+| `SMTP_HOST` | Transactional email host; required in production | empty |
+| `SMTP_PORT` | SMTP port | `587` |
+| `SMTP_USER` / `SMTP_PASSWORD` | SMTP credentials | empty |
+| `SMTP_FROM` | From address | `no-reply@switchboard.local` |
+| `APP_BASE_URL` | Public URL used in invite/verify/reset links | `http://localhost:3000` |
+| `REDIS_URL` | Distributed call/login limits | empty |
+| `APP_ORIGIN` | Allowed browser origin for cookies, CORS, and mutating requests | `http://localhost:3000,http://127.0.0.1:3000` |
 | `SESSION_TTL` | Session lifetime | `12h` |
 | `COOKIE_SECURE` | Require HTTPS cookies | `false` |
+| `PRICING_FILE` | Versioned per-model price table | `config/pricing.json` |
+| `DEFAULT_MONTHLY_CAP_MINOR` | Default cap when no tenant row exists; `0` = unlimited | `0` |
+| `BUDGET_ACTION` | Action at 100%: `transfer`, `refuse`, or `degrade` | `transfer` |
+| `MAX_CALL_SECONDS` | Hard per-call duration | `900` |
+| `RECORDING_RETENTION_DAYS` | Audio retention | `30` |
+| `TRANSCRIPT_RETENTION_DAYS` | Transcript retention | `180` |
 | `KNOWLEDGE_DIR` | Ingested knowledge directory | `data/knowledge` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP endpoint | empty |
 | `CHAT_MODEL_LARGE` | Optional larger model route | empty |
 
-Accounts and sessions live in SQLite. The owner account is unlimited; other accounts have a 2-call lifetime quota and one active call at a time. While `AUTH_DISABLED=true`, every request uses a local unlimited owner account, so the quota is bypassed.
+Accounts and sessions live in PostgreSQL. The owner account is unlimited; other accounts have a 2-call lifetime quota and one active call at a time. `AUTH_DISABLED=true` only works when `APP_ENV=development` or `ALLOW_DEV_AUTH=true`; production always requires auth.
 
-The LLM brain selection is automatic: Sarvam if `SARVAM_API_KEY` is set, then OpenAI if `OPENAI_API_KEY` is set, then Ollama via `BRAIN=llm` or the hybrid rule brain.
+The agent LLM is Gemini when `GEMINI_API_KEY` is set, then OpenAI, with fallback adapters. STT is Deepgram; TTS is Cartesia or ElevenLabs.
 
 ## Commands
 
@@ -334,21 +425,19 @@ The LLM brain selection is automatic: Sarvam if `SARVAM_API_KEY` is set, then Op
 | `make web` | Next.js landing and console on `:3000` |
 | `make ingest` | Ingest Rivera docs into `data/knowledge` |
 | `make eval` | Booking, escalation, and RAG evals |
-| `make smoke` | Live Sarvam call that asserts a booking; needs `SMOKE_EMAIL` and `SMOKE_PASSWORD` |
-| `make load` | 50 concurrent fake callers; needs `LOAD_EMAIL` and `LOAD_PASSWORD` |
 | `make sip-plan` | Write reviewed LiveKit SIP plans for Plivo |
+| `make retention` | Enforce recording and transcript retention |
+| `make backfill` | Import legacy `data/calls.jsonl` metadata and labels (add `-transcripts` only with a consent basis) |
 | `make agent-install` | Create the agent venv and install LiveKit Agents |
 | `make agent` | Run the LiveKit agent worker in dev mode |
 | `make check` | Go build, vet, tests, and web type check |
 
-`make smoke` uses real Sarvam credits. It signs in with `SMOKE_EMAIL` and `SMOKE_PASSWORD`, defaults to the `acme` tenant, and picks a random future date. Use the owner account: standard accounts are limited to 2 calls.
+Create or migrate accounts:
 
 ```bash
-SMOKE_EMAIL=you@example.com SMOKE_PASSWORD='...' make smoke
-LOAD_EMAIL=you@example.com LOAD_PASSWORD='...' make load
+go run ./cmd/account -owner -email you@example.com -password '...' -tenant rivera
+go run ./cmd/migrate-auth -dry-run   # inspect SQLite accounts before moving them
 ```
-
-Restart `make go` first for a clean in-memory job store.
 
 Optional observability:
 
@@ -364,26 +453,28 @@ Prometheus runs on `:9090`, Grafana on `:3001`, and Jaeger on `:16686`. This sta
 agent/                 LiveKit Python agent worker (STT, LLM, TTS, tools)
 cmd/switchboard/       Go entry point and HTTP routes
 cmd/account/           Create the owner or trial accounts
+cmd/migrate-auth/      Move SQLite accounts to PostgreSQL
+cmd/backfill/          Import legacy JSONL calls and labels
+cmd/retention/         Enforce recording and transcript retention
 cmd/eval/              Booking and escalation eval runner
-cmd/loadgen/           Fake concurrent callers
 cmd/sip-setup/         Emit reviewed LiveKit SIP plans for Plivo
-internal/agent/        Session, VAD, brains, providers
+config/pricing.json    Versioned per-model price table
+internal/agent/        Legacy session types used by the eval brain
 internal/booking/      Rule and LLM brains, tools, evals
-internal/jobs/         Job store, availability, staff assignment
+internal/billing/      Usage ledger, price table, budget checks
+internal/jobs/         Job store, availability, staff assignment, migrations
 internal/staff/        Staff skills, days, shifts, assignments
 internal/tenant/       Tenant config loader
-internal/ws/           WebSocket handler, hub feed, audio bridge
-internal/api/          Calls, labels, report, staff, geocode, agent tools
-internal/calls/        Durable call records and consent decisions
-internal/livekit/      Browser room tokens (JWT HS256)
+internal/api/          Calls, live calls, labels, report, staff, recording, agent tools
+internal/calls/        Call records, turns, consent, recordings, reaper
+internal/livekit/      Browser/supervisor tokens and webhook verification
+internal/storage/      S3 presign and delete for recordings
 internal/telephony/    Provider abstraction: Plivo primary, Exotel stub
-internal/auth/         Accounts, sessions, quotas, login
-internal/store/        Call records and summaries
+internal/auth/         Postgres/SQLite accounts, sessions, quotas, login, Redis limits
 internal/inference/    AI service clients
 inference/             FastAPI AI service, RAG, caching, TTS, STT, evals
 web/                   Next.js landing and single page console
 tenants/               Per tenant config, docs, and staff
-scripts/               Live smoke test
 docs/screenshots/      README screenshots
 docs/case-study.md     Portfolio write-up
 deploy/                Caddy, systemd, and single-VM guide
@@ -393,13 +484,14 @@ deploy/observability/  Prometheus, Grafana, Jaeger
 
 ## Limitations
 
-- **Telephony needs carrier setup.** LiveKit inbound SIP and the Plivo provider are implemented, but a live number requires Plivo KYC, a DID, and applying the generated SIP plans. Exotel is intentionally not implemented yet.
-- **Auth is disabled in the local preview.** `AUTH_DISABLED=true` bypasses login and quota; do not deploy with it enabled. When enabled, accounts are invite-only, with no public signup, password reset, or email verification. Standard accounts get 2 lifetime calls; the owner is unlimited.
-- **Call records remain local.** Bookings and staff persist in PostgreSQL; call records are appended to `data/calls.jsonl` and labels live in `data/labels.json`.
-- **No recordings.** Transcripts are kept; audio is not.
-- **No cost caps.** Usage is measured; hard budgets are not enforced.
-- **Single node.** Redis, a queue, and automatic failover are not included. The one-call limiter is per process, so multiple Go instances would each allow a call.
-- **Sarvam dependency.** Speech and chat quality and latency depend on the Sarvam API.
+- **Telephony needs carrier setup.** LiveKit inbound SIP is implemented, but a live number requires carrier KYC, a DID, and applying the generated SIP plans. Exotel is intentionally not implemented.
+- **Self-serve signup creates a workspace.** New businesses sign up at `/signup`, which creates a tenant directory and owner account. Teammates are invited from **Access**. SSO is not included.
+- **Tenant config is file-backed.** New workspaces write `tenants/<id>/config.json`; a multi-instance deployment needs a shared volume or a move to object storage/PostgreSQL.
+- **Recordings need object storage.** Without `RECORDING_S3_*`, the agent tells the caller recording is unavailable. Retention is enforced by `make retention`, not automatically by the web process.
+- **Cost caps need a tenant row.** `tenant_budgets` defaults to unlimited in development. Set a cap and a price table before production.
+- **Single node without Redis.** Set `REDIS_URL` for distributed call/login limits. Without it, limits are per process.
+- **Sarvam/Deepgram/model dependency.** Speech and chat quality and latency depend on external providers.
+- **No labeled real-call set.** Escalation scores remain authored-scenario scores until real calls are labeled.
 - **Demo data.** Staff, tenants, addresses, and calls are fictional.
 - **Not for emergencies.** Do not point a real emergency line at this demo.
 - **WebGPU.** The landing shards need WebGPU; without it the hero falls back to a flat background.
@@ -408,15 +500,17 @@ deploy/observability/  Prometheus, Grafana, Jaeger
 
 This branch is a demo. Before a real phone product:
 
-- [ ] Inbound DIDs and SIP or WebRTC media.
+- [ ] Inbound DIDs and SIP media in production. (Code is ready; carrier KYC is not provisioned.)
 - [ ] Real transfer with ring groups, paging, hold timeout, and fallback.
-- [ ] Public signup, email verification, password reset, RBAC, and distributed quotas.
-- [x] Postgres for bookings and staff.
-- [ ] Redis for distributed quotas and object storage for recordings.
-- [ ] Call recordings with consent and retention.
-- [ ] Cost metering, per-tenant budgets, and hard caps.
-- [ ] SLOs, alerts, on call, and incident runbooks.
-- [ ] Compliance: consent, recording disclosure, DPDP, and GDPR.
+- [x] Self-serve signup, email verification, password reset, and owner/manager/viewer roles.
+- [ ] SSO and enterprise identity.
+- [x] Postgres for bookings, staff, calls, turns, labels, usage, and auth.
+- [x] Redis-backed distributed quotas and object storage for recordings.
+- [x] Call recordings with separate consent, retention, and deletion.
+- [x] Per-tenant usage ledger, price table, budgets, and hard call duration.
+- [ ] SLOs with Alertmanager routing, on-call, and incident runbooks. (Rules exist; routing does not.)
+- [x] Consent and recording disclosure. DPDP/GDPR legal review remains open.
+- [x] Legacy WebSocket call path removed.
 
 Production hardening is tracked separately; `main` stays as the portfolio demo snapshot.
 

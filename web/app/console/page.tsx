@@ -2,22 +2,20 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { BookingCard } from "@/components/BookingCard";
+import { AccessTab } from "@/components/AccessTab";
 import { LiveKitTestCall } from "@/components/LiveKitTestCall";
-import { PhotoCard } from "@/components/PhotoCard";
 import { TeamTab } from "@/components/TeamTab";
 import { Badge, Card, Empty, SectionHeading, Stat } from "@/components/ui";
 import { useBridge } from "@/lib/useBridge";
 import { useSession } from "@/lib/session";
 import { useSupervisor, type Call } from "@/lib/useSupervisor";
-import { useSwitchboard } from "@/lib/useSwitchboard";
 import { useLiveKitCall } from "@/lib/useLiveKitCall";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
 const api = (p: string) => `${API}${p}`;
 
-type Tab = "overview" | "test" | "live" | "calls" | "evals" | "team";
+type Tab = "overview" | "test" | "live" | "calls" | "evals" | "team" | "access";
 
 type CallRecord = {
   id: string;
@@ -31,6 +29,8 @@ type CallRecord = {
   transcript?: { role: string; text: string }[];
   summary?: string;
 };
+
+type TenantOption = { id: string; name: string };
 
 type Report = {
   total: number;
@@ -51,45 +51,25 @@ const NAV: { id: Tab; label: string }[] = [
   { id: "calls", label: "Call history" },
   { id: "evals", label: "Agent quality" },
   { id: "team", label: "Team" },
+  { id: "access", label: "Access" },
 ];
 
 export default function Page() {
-  const {
-    inCall,
-    status,
-    rttMs,
-    transcript,
-    agentText,
-    agentLang,
-    tool,
-    citations,
-    booking,
-    latency,
-    level,
-    sampleRate,
-    devices,
-    refreshDevices,
-    startCall,
-    endCall,
-    sendText,
-  } = useSwitchboard();
   const livekit = useLiveKitCall();
   const { account, logout, refresh } = useSession();
   const { calls, connected } = useSupervisor();
   const [tab, setTab] = useState<Tab>("overview");
-  const [transport, setTransport] = useState<"livekit" | "legacy">("livekit");
   const [selectedId, setSelectedId] = useState("");
   const { status: bridgeStatus } = useBridge(selectedId);
-  const [lang, setLang] = useState("en");
   const [tenant, setTenant] = useState("rivera");
-  const [micId, setMicId] = useState("");
+  const [tenantOptions, setTenantOptions] = useState<TenantOption[]>([]);
   const [records, setRecords] = useState<CallRecord[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [expandedId, setExpandedId] = useState("");
   const [callQuery, setCallQuery] = useState("");
   const [callFilter, setCallFilter] = useState<"all" | "handled" | "help" | "empty">("all");
   const [callLimit, setCallLimit] = useState(10);
-  const wasInCall = useRef(false);
+  const wasLive = useRef(false);
   const [assistantStatus, setAssistantStatus] = useState<
     "checking" | "ready" | "offline"
   >("checking");
@@ -132,25 +112,32 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    if (account && !account.is_owner && account.tenant_id) {
-      setTenant(account.tenant_id);
-    }
+    if (account?.tenant_id) setTenant(account.tenant_id);
   }, [account]);
 
   useEffect(() => {
-    if (inCall) {
+    if (!account) return;
+    fetch(api("/api/tenants"), { credentials: "include", cache: "no-store" })
+      .then(async (res) => (res.ok ? ((await res.json()) as TenantOption[]) : []))
+      .then((items) => setTenantOptions(Array.isArray(items) ? items : []))
+      .catch(() => undefined);
+  }, [account]);
+
+  useEffect(() => {
+    const active = livekit.status === "connected" || livekit.status === "connecting";
+    if (active) {
       refresh();
-      wasInCall.current = true;
-    } else if (wasInCall.current) {
+      wasLive.current = true;
+    } else if (wasLive.current) {
       refresh();
-      wasInCall.current = false;
+      wasLive.current = false;
     }
-  }, [inCall, refresh]);
+  }, [livekit.status, refresh]);
 
   const remaining = account
     ? Math.max(0, account.free_call_limit - account.calls_used)
     : 0;
-  const unlimited = !!account?.is_owner;
+  const unlimited = !!account && (account.is_owner || account.free_call_limit === 0);
   const outOfCalls = !!account && !unlimited && remaining <= 0;
   const activeTenant = account?.is_owner ? tenant : account?.tenant_id || tenant;
 
@@ -175,35 +162,15 @@ export default function Page() {
   const startTest = () => {
     if (outOfCalls) return;
     setSelectedId("");
-    if (transport === "livekit") {
-      void livekit.start(activeTenant);
-      setTab("test");
-      return;
-    }
-    startCall(lang, activeTenant, micId);
+    void livekit.start(activeTenant);
     setTab("test");
   };
 
-  const takeOver = async (id: string) => {
-    if (inCall) await endCall();
+  const takeOver = (id: string) => {
     setSelectedId(id);
     setTab("live");
   };
 
-  const speaking = status.startsWith("agent");
-  const callStatusLabel = !inCall
-    ? "Ready to test"
-    : speaking
-      ? "Receptionist speaking"
-      : status.startsWith("listening") || status === "connected"
-        ? "Listening — speak when ready"
-        : status === "mic error"
-          ? "Microphone unavailable"
-          : status === "call failed"
-            ? "Could not connect"
-            : status === "closed"
-              ? "Call ended"
-              : "Connecting";
   const selected = calls.find((c) => c.id === selectedId);
   const escalatedLive = calls.filter((c) => c.escalated).length;
   const completedRecords = records.filter((record) => record.turns > 0);
@@ -244,7 +211,7 @@ export default function Page() {
         </Link>
 
         <nav aria-label="Main navigation" className="flex-1 space-y-1 px-3">
-          {NAV.map((item) => (
+          {NAV.filter((item) => item.id !== "access" || account?.role === "owner").map((item) => (
             <button
               key={item.id}
               type="button"
@@ -297,9 +264,11 @@ export default function Page() {
             <div className="px-1 text-[10px] text-[#A8A092]">
               {authDisabled
                 ? "Unlimited test calls"
-                : account?.is_owner
+                : account?.role === "owner"
                   ? "Owner · unlimited calls"
-                  : `Free calls: ${remaining}/${account?.free_call_limit ?? 0}`}
+                  : account?.role === "manager"
+                    ? "Manager · unlimited calls"
+                    : `Free calls: ${remaining}/${account?.free_call_limit ?? 0}`}
             </div>
             {!authDisabled && (
               <button
@@ -347,7 +316,7 @@ export default function Page() {
             </div>
           </div>
           <nav aria-label="Main navigation" className="grid grid-cols-3 gap-1 px-3 pb-3">
-            {NAV.map((item) => (
+            {NAV.filter((item) => item.id !== "access" || account?.role === "owner").map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -395,11 +364,7 @@ export default function Page() {
               onGoLive={() => setTab("live")}
               onGoCalls={() => setTab("calls")}
               onStartTest={() => {
-                if (inCall) {
-                  setTab("test");
-                } else {
-                  startTest();
-                }
+                startTest();
               }}
             />
           )}
@@ -412,286 +377,13 @@ export default function Page() {
                 subtitle="Speak naturally, ask a question, or try booking a visit. You can interrupt at any time."
               />
 
-              <div className="mb-5 flex flex-wrap items-center gap-3">
-                <span className="text-sm font-medium text-[#A8A092]">Transport</span>
-                <div className="inline-flex rounded-lg border border-[#3A3A3A] bg-[#242424] p-1">
-                  {(["livekit", "legacy"] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setTransport(mode)}
-                      className={`min-h-8 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                        transport === mode
-                          ? "bg-[#C87941] text-[#111111]"
-                          : "text-[#B5AEA3] hover:bg-[#2A2A2A]"
-                      }`}
-                    >
-                      {mode === "livekit" ? "WebRTC (LiveKit)" : "Legacy (Sarvam)"}
-                    </button>
-                  ))}
-                </div>
-                <span className="text-xs text-[#8A8379]">
-                  {transport === "livekit"
-                    ? "Phone-ready agent. Recommended."
-                    : "Original WebSocket pipeline, kept for rollback."}
-                </span>
-              </div>
-
-              {transport === "livekit" ? (
-                <LiveKitTestCall
-                  call={livekit}
-                  tenant={activeTenant}
-                  canSwitchTenant={!!account?.is_owner && !authDisabled}
-                  onTenantChange={setTenant}
-                />
-              ) : (
-              <div className="grid items-start gap-6 lg:grid-cols-2">
-                <Card className="p-6">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h2 className="text-base font-semibold tracking-tight text-[#EAE5DC]">
-                        Start a call
-                      </h2>
-                      <p className="text-sm text-[#A8A092]">
-                        {account?.is_owner && !authDisabled
-                          ? "Choose a business and language, then talk."
-                          : "Choose a language, then try a few common requests."}
-                      </p>
-                    </div>
-                    <span
-                      className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${
-                        inCall
-                          ? speaking
-                          ? "bg-amber-500/10 text-amber-300"
-                            : status === "mic error" || status === "call failed"
-                              ? "bg-rose-500/10 text-rose-300"
-                              : "bg-emerald-500/10 text-emerald-300"
-                          : "bg-[#2E2E2E] text-[#A8A092]"
-                      }`}
-                    >
-                      <span
-                        className={`h-2 w-2 rounded-full ${
-                          inCall ? "animate-pulse bg-current" : "bg-[#6E675D]"
-                        }`}
-                      />
-                      {callStatusLabel}
-                    </span>
-                  </div>
-
-                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                    {account?.is_owner && !authDisabled && (
-                      <label className="block">
-                        <span className="mb-1 block text-xs font-medium text-[#A8A092]">
-                          Business
-                        </span>
-                        <select
-                          value={activeTenant}
-                          onChange={(e) => setTenant(e.target.value)}
-                          disabled={inCall}
-                          className="w-full rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30 disabled:opacity-50"
-                        >
-                          <option value="rivera">Rivera Plumbing &amp; HVAC</option>
-                          <option value="acme">Acme Home Services</option>
-                        </select>
-                      </label>
-                    )}
-
-                    <label className={`block ${account?.is_owner && !authDisabled ? "" : "sm:col-span-2"}`}>
-                      <span className="mb-1 block text-xs font-medium text-[#A8A092]">
-                        Language
-                      </span>
-                      <select
-                        value={lang}
-                        onChange={(e) => setLang(e.target.value)}
-                        disabled={inCall}
-                        className="w-full rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30 disabled:opacity-50"
-                      >
-                        <option value="">Auto-detect</option>
-                        <option value="en">English</option>
-                        <option value="hi">हिन्दी</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="mt-3">
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="text-xs font-medium text-[#A8A092]">
-                        Microphone
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => refreshDevices()}
-                        className="text-xs font-medium text-[#D98E5A] hover:underline"
-                      >
-                        Refresh
-                      </button>
-                    </div>
-                    <select
-                      value={micId}
-                      onChange={(e) => setMicId(e.target.value)}
-                      disabled={inCall}
-                      className="w-full rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30 disabled:opacity-50"
-                    >
-                      <option value="">System default</option>
-                      {devices.map((device) => (
-                        <option key={device.deviceId} value={device.deviceId}>
-                          {device.label}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-[#A8A092]">
-                      Your browser may ask for microphone access when the call starts.
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={() => (inCall ? endCall() : startTest())}
-                    disabled={!inCall && outOfCalls}
-                    className={`mt-5 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#111111] disabled:cursor-not-allowed disabled:opacity-50 ${
-                      inCall
-                        ? "bg-rose-600 text-[#EAE5DC] hover:bg-rose-500 focus:ring-rose-300"
-                        : "bg-[#C87941] text-[#111111] hover:bg-[#D98E5A] focus:ring-[#C87941]/40"
-                    }`}
-                  >
-                    {inCall
-                      ? "End call"
-                      : outOfCalls
-                        ? "No trial calls left"
-                        : "Start browser call"}
-                  </button>
-                  <p
-                    className={`mt-2 text-center text-xs ${
-                      outOfCalls ? "text-rose-300" : "text-[#A8A092]"
-                    }`}
-                  >
-                    {authDisabled
-                      ? "Unlimited browser test calls in this preview."
-                      : unlimited
-                        ? "Owner workspace · no call limit."
-                      : outOfCalls
-                        ? "You have used both free calls."
-                        : `${remaining} of ${account?.free_call_limit ?? 0} free calls left.`}
-                  </p>
-
-                  <details className="mt-4 rounded-xl border border-[#3A3A3A] bg-[#2A2A2A] px-4 py-3">
-                    <summary className="cursor-pointer text-sm font-medium text-[#D8D2C7]">
-                      Connection details (optional)
-                    </summary>
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-                    <MiniStat
-                      label="RTT"
-                      value={rttMs === null ? "—" : `${rttMs.toFixed(0)} ms`}
-                    />
-                    <MiniStat
-                      label="STT"
-                      value={latency ? `${latency.stt} ms` : "—"}
-                    />
-                    <MiniStat
-                      label="1st audio"
-                      value={
-                        latency && latency.firstAudio >= 0
-                          ? `${latency.firstAudio} ms`
-                          : "—"
-                      }
-                    />
-                    <MiniStat
-                      label="Turn"
-                      value={latency ? `${latency.turn} ms` : "—"}
-                    />
-                    </div>
-
-                    <div className="mt-3">
-                    <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-[#A8A092]">
-                      <span>mic level</span>
-                      <span>
-                        {sampleRate
-                          ? `${(sampleRate / 1000).toFixed(0)} kHz`
-                          : "—"}
-                      </span>
-                    </div>
-                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[#2E2E2E]">
-                      <div
-                        className="h-full rounded-full bg-emerald-500/100 transition-[width] duration-100"
-                        style={{
-                          width: `${Math.min(100, (level / 6000) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                    </div>
-                  </details>
-
-                  <div className="mt-5 border-t border-[#2E2E2E] pt-4">
-                    <div className="text-sm font-medium text-[#D8D2C7]">
-                      Try asking
-                    </div>
-                    <p className="mt-1 text-xs text-[#A8A092]">Choose an example or say it out loud.</p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {[
-                        "My kitchen sink is leaking",
-                        "What is your call-out fee?",
-                        "I need to reschedule Friday",
-                      ].map((line) => (
-                        <button
-                          key={line}
-                          type="button"
-                          disabled={!inCall}
-                          onClick={() => sendText(line)}
-                          className="min-h-9 rounded-lg bg-[#2E2E2E] px-3 py-2 text-xs text-[#B5AEA3] transition-colors hover:bg-[#3A3A3A] disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {line}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </Card>
-
-                <div className="space-y-6">
-                  <BookingCard booking={booking} />
-                  <PhotoCard inCall={inCall} onSendText={sendText} />
-
-                  <Card className="p-6">
-                    <div className="flex items-center justify-between gap-3">
-                      <h2 className="text-base font-semibold tracking-tight text-[#EAE5DC]">
-                        Conversation
-                      </h2>
-                      <div className="flex flex-wrap gap-2">
-                        {agentLang && <Badge tone="indigo">{languageName(agentLang)}</Badge>}
-                      </div>
-                    </div>
-
-                    <div className="mt-5 space-y-4">
-                      <Bubble who="Caller" text={transcript} tone="slate" />
-                      <Bubble who="Agent" text={agentText} tone="indigo" />
-                    </div>
-
-                    {(tool || citations.length > 0) && (
-                      <div className="mt-4 flex flex-wrap gap-2 border-t border-[#2E2E2E] pt-4">
-                        {tool && <Badge>{toolLabel(tool)}</Badge>}
-                        {citations.map((c) => (
-                          <Badge key={c} tone="emerald">
-                            source · {c}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                  </Card>
-
-                  <Card className="p-6">
-                    <h2 className="text-base font-semibold tracking-tight text-[#EAE5DC]">
-                      Before you start
-                    </h2>
-                    <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-[#A8A092]">
-                      <li>Allow microphone access when your browser asks.</li>
-                      <li>Use headphones to avoid echo. You can interrupt the receptionist at any time.</li>
-                      <li>Call transcripts are saved in Call history. Audio is not recorded in this preview.</li>
-                    </ul>
-                    <p className="mt-4 rounded-xl bg-[#2A2A2A] p-4 text-xs leading-relaxed text-[#A8A092]">
-                      For a quick start, choose an example prompt above after the call connects.
-                    </p>
-                  </Card>
-                </div>
-              </div>
-              )}
+              <LiveKitTestCall
+                call={livekit}
+                tenant={activeTenant}
+                canSwitchTenant={!!account?.is_owner && !authDisabled}
+                tenants={tenantOptions}
+                onTenantChange={setTenant}
+              />
             </div>
           )}
 
@@ -747,11 +439,11 @@ export default function Page() {
                     {(selected?.transcript ?? []).map((turn, i) => (
                       <p key={i} className="text-sm leading-relaxed">
                         <span className="mr-1 text-xs font-medium uppercase tracking-wide text-[#8A8379]">
-                          {turn.role}
+                          {isCaller(turn.role) ? "Caller" : "Agent"}
                         </span>
                         <span
                           className={
-                            turn.role === "caller"
+                            isCaller(turn.role)
                               ? "text-[#D8D2C7]"
                               : "text-[#EAE5DC]"
                           }
@@ -1022,10 +714,13 @@ export default function Page() {
             <TeamTab
               tenant={activeTenant}
               canSwitchTenant={!!account?.is_owner && !authDisabled}
-              canManageStaff={!!account?.is_owner}
+              canManageStaff={account?.role === "owner" || account?.role === "manager"}
+              tenants={tenantOptions}
               onTenantChange={setTenant}
             />
           )}
+
+          {tab === "access" && account?.role === "owner" && <AccessTab />}
         </main>
       </div>
     </div>
@@ -1317,7 +1012,7 @@ function formatCallTime(value: string) {
 }
 
 function callSummary(record: CallRecord) {
-  const callerText = record.transcript?.find((turn) => turn.role === "caller")?.text;
+  const callerText = record.transcript?.find((turn) => isCaller(turn.role))?.text;
   if (callerText) return callerText;
   const summary = record.summary
     ?.replace(/^handled automatically\.?\s*/i, "")
@@ -1329,6 +1024,10 @@ function callSummary(record: CallRecord) {
 function recordOutcome(record: CallRecord) {
   if (record.escalated) return "Team help";
   return record.turns > 0 ? "Handled" : "No details";
+}
+
+function isCaller(role: string) {
+  return role === "caller" || role === "user";
 }
 
 function toolLabel(tool: string) {
@@ -1408,11 +1107,11 @@ function LiveCallCard({
         {(call.transcript ?? []).map((turn, i) => (
           <p key={i} className="text-sm leading-relaxed">
             <span className="mr-1 text-xs font-medium uppercase tracking-wide text-[#8A8379]">
-              {turn.role === "caller" ? "Caller" : "Agent"}
+              {isCaller(turn.role) ? "Caller" : "Agent"}
             </span>
             <span
               className={
-                turn.role === "caller" ? "text-[#D8D2C7]" : "text-[#EAE5DC]"
+                isCaller(turn.role) ? "text-[#D8D2C7]" : "text-[#EAE5DC]"
               }
             >
               {turn.text}
@@ -1514,11 +1213,11 @@ function RecordRow({
             {(record.transcript ?? []).map((turn, i) => (
               <p key={i} className="text-sm leading-relaxed">
                 <span className="mr-1 text-xs font-medium uppercase tracking-wide text-[#8A8379]">
-                  {turn.role}
+                  {isCaller(turn.role) ? "Caller" : "Agent"}
                 </span>
                 <span
                   className={
-                    turn.role === "caller" ? "text-[#D8D2C7]" : "text-[#EAE5DC]"
+                    isCaller(turn.role) ? "text-[#D8D2C7]" : "text-[#EAE5DC]"
                   }
                 >
                   {turn.text}

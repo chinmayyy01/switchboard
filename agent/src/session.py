@@ -33,8 +33,17 @@ BASE_KEYTERMS = [
 ]
 
 
-def _llms():
+def _sarvam_available() -> bool:
+    return bool(os.getenv("SARVAM_API_KEY"))
+
+
+def _llms(provider: str):
     candidates = []
+    if provider == "sarvam" and _sarvam_available():
+        from livekit.plugins import sarvam
+
+        logger.info("LLM primary: sarvam/%s", os.getenv("SARVAM_MODEL", "sarvam-105b-conversations"))
+        candidates.append(sarvam.LLM(model=os.getenv("SARVAM_MODEL", "sarvam-105b-conversations")))
     gemini_key = os.getenv("GEMINI_API_KEY")
     if gemini_key:
         from livekit.plugins import google
@@ -64,7 +73,7 @@ def _llms():
     return LLMFallback(candidates, attempt_timeout=4.0, sticky=True)
 
 
-def _stt(cfg: SessionConfig):
+def _stt(cfg: SessionConfig, provider: str):
     keyterms = []
     for term in [*cfg.services, cfg.tenant_name, *BASE_KEYTERMS]:
         term = term.strip().lower()
@@ -88,11 +97,29 @@ def _stt(cfg: SessionConfig):
         filler_words=False,
         endpointing_ms=int(os.getenv("STT_ENDPOINTING_MS", "200")),
     )
-    return STTFallback([primary, fallback], attempt_timeout=6.0, max_retry_per_stt=1)
+    candidates = [primary, fallback]
+    if provider == "sarvam" and _sarvam_available():
+        from livekit.plugins import sarvam
+
+        logger.info("STT primary: sarvam/%s", os.getenv("SARVAM_STT_MODEL", "saaras:v4"))
+        candidates.insert(0, sarvam.STT(
+            language=os.getenv("STT_LANGUAGE", "en-IN"),
+            model=os.getenv("SARVAM_STT_MODEL", "saaras:v4"),
+        ))
+    return STTFallback(candidates, attempt_timeout=6.0, max_retry_per_stt=1)
 
 
-def _tts():
+def _tts(provider: str):
     candidates = []
+    if provider == "sarvam" and _sarvam_available():
+        from livekit.plugins import sarvam
+
+        logger.info("TTS primary: sarvam/%s", os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"))
+        candidates.append(sarvam.TTS(
+            target_language_code=os.getenv("STT_LANGUAGE", "en-IN"),
+            model=os.getenv("SARVAM_TTS_MODEL", "bulbul:v3"),
+            speaker=os.getenv("SARVAM_TTS_SPEAKER", "shubh"),
+        ))
     if os.getenv("CARTESIA_API_KEY"):
         options = {"model": os.getenv("CARTESIA_MODEL", "sonic-3")}
         if os.getenv("CARTESIA_VOICE_ID"):
@@ -114,10 +141,16 @@ def _tts():
 
 
 def build_session(cfg: SessionConfig) -> AgentSession:
+    provider = (cfg.provider or "default").lower()
+    if provider not in ("default", "sarvam"):
+        provider = "default"
+    if provider == "sarvam" and not _sarvam_available():
+        logger.warning("Sarvam selected but SARVAM_API_KEY is not set; using the default stack")
+        provider = "default"
     return AgentSession(
-        stt=_stt(cfg),
-        llm=_llms(),
-        tts=_tts(),
+        stt=_stt(cfg, provider),
+        llm=_llms(provider),
+        tts=_tts(provider),
         vad=silero.VAD.load(),
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),

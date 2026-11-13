@@ -4,7 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 )
+
+// DisclosureVersion identifies the consent wording the caller heard. Bump it
+// whenever the disclosure text changes so stored consent evidence stays
+// interpretable.
+const DisclosureVersion = "2026-11-08"
 
 type Call struct {
 	ID           string `json:"id"`
@@ -12,11 +18,27 @@ type Call struct {
 	Direction    string `json:"direction"`
 	FromNumber   string `json:"from_number"`
 	ToNumber     string `json:"to_number"`
+	FromRaw      string `json:"from_number_raw,omitempty"`
+	ToRaw        string `json:"to_number_raw,omitempty"`
+	SIPCallID    string `json:"sip_call_id,omitempty"`
+	Source       string `json:"source,omitempty"`
+	AgentVersion string `json:"agent_version,omitempty"`
 	RoomName     string `json:"room_name"`
 	Outcome      string `json:"outcome"`
 	Escalated    bool   `json:"escalated"`
 	Consent      *bool  `json:"recording_consent,omitempty"`
+	Transcript   *bool  `json:"transcript_consent,omitempty"`
 	ManagerPhone string `json:"manager_number,omitempty"`
+}
+
+type Turn struct {
+	CallID    string `json:"call_id"`
+	TenantID  string `json:"tenant_id"`
+	Seq       int    `json:"seq"`
+	Role      string `json:"role"`
+	Text      string `json:"text"`
+	LatencyMS int    `json:"latency_ms,omitempty"`
+	ToolName  string `json:"tool_name,omitempty"`
 }
 
 type Store struct {
@@ -31,21 +53,47 @@ func (s *Store) Start(ctx context.Context, call Call) error {
 	if call.Direction == "" {
 		call.Direction = "inbound"
 	}
+	from, fromRaw := NormalizeCallerNumber(call.FromNumber)
+	if fromRaw == "" {
+		fromRaw = call.FromRaw
+	}
+	to, toRaw := NormalizeCallerNumber(call.ToNumber)
+	if toRaw == "" {
+		toRaw = call.ToRaw
+	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO calls (id, tenant_id, direction, from_number, to_number, room_name, manager_number)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO calls (id, tenant_id, direction, from_number, to_number, from_number_raw, to_number_raw,
+                   sip_call_id, source, room_name, manager_number, agent_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (id) DO UPDATE SET
-    from_number = EXCLUDED.from_number,
-    to_number = EXCLUDED.to_number,
-    room_name = EXCLUDED.room_name,
-    manager_number = EXCLUDED.manager_number`,
-		call.ID, call.TenantID, call.Direction, call.FromNumber, call.ToNumber, call.RoomName, call.ManagerPhone)
+    from_number = COALESCE(NULLIF(EXCLUDED.from_number, ''), calls.from_number),
+    to_number = COALESCE(NULLIF(EXCLUDED.to_number, ''), calls.to_number),
+    from_number_raw = COALESCE(NULLIF(EXCLUDED.from_number_raw, ''), calls.from_number_raw),
+    to_number_raw = COALESCE(NULLIF(EXCLUDED.to_number_raw, ''), calls.to_number_raw),
+    sip_call_id = COALESCE(NULLIF(EXCLUDED.sip_call_id, ''), calls.sip_call_id),
+    source = COALESCE(NULLIF(EXCLUDED.source, ''), calls.source),
+    room_name = COALESCE(NULLIF(EXCLUDED.room_name, ''), calls.room_name),
+    manager_number = COALESCE(NULLIF(EXCLUDED.manager_number, ''), calls.manager_number),
+    agent_version = COALESCE(NULLIF(EXCLUDED.agent_version, ''), calls.agent_version)`,
+		call.ID, call.TenantID, call.Direction, from, to, fromRaw, toRaw,
+		call.SIPCallID, call.Source, call.RoomName, call.ManagerPhone, call.AgentVersion)
 	return err
 }
 
-func (s *Store) SetConsent(ctx context.Context, id string, allowed bool) error {
+// SetConsent stores both decisions. The two consents are independent: a caller
+// can decline audio and still allow a text transcript, or the reverse.
+func (s *Store) SetConsent(ctx context.Context, id string, recording, transcript bool, language string) error {
+	if language == "" {
+		language = "en"
+	}
 	result, err := s.db.ExecContext(ctx, `
-UPDATE calls SET recording_consent = $2, consent_at = NOW() WHERE id = $1`, id, allowed)
+UPDATE calls
+SET recording_consent = $2,
+    transcript_consent = $3,
+    consent_at = NOW(),
+    consent_version = $4,
+    consent_language = $5
+WHERE id = $1`, id, recording, transcript, DisclosureVersion, language)
 	if err != nil {
 		return err
 	}
@@ -75,20 +123,75 @@ UPDATE calls SET escalated = TRUE, escalation_reason = $2 WHERE id = $1`, id, re
 	return nil
 }
 
-func (s *Store) End(ctx context.Context, id, outcome string) error {
+func (s *Store) End(ctx context.Context, id, outcome string) (bool, error) {
+	return s.EndWithReason(ctx, id, outcome, "")
+}
+
+func (s *Store) EndWithReason(ctx context.Context, id, outcome, reason string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `
-UPDATE calls SET ended_at = NOW(), outcome = $2 WHERE id = $1`, id, outcome)
+UPDATE calls SET ended_at = NOW(), outcome = $2, end_reason = $3
+WHERE id = $1 AND ended_at IS NULL`, id, outcome, reason)
 	if err != nil {
-		return err
+		return false, err
 	}
 	n, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return false, err
 	}
-	if n == 0 {
-		return ErrNotFound
+	if n > 0 {
+		return true, nil
 	}
-	return nil
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM calls WHERE id = $1)", id).Scan(&exists); err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, ErrNotFound
+	}
+	return false, nil
+}
+
+// EndByRoom closes the open call for a LiveKit room. It is idempotent: a
+// webhook retry, or a webhook arriving after the agent already ended the call,
+// is a no-op rather than an error.
+func (s *Store) EndByRoom(ctx context.Context, room, outcome, reason string) (int64, error) {
+	if room == "" {
+		return 0, nil
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE calls
+SET ended_at = NOW(), outcome = $2, end_reason = $3
+WHERE room_name = $1 AND ended_at IS NULL`, room, outcome, reason)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// SetCallerByRoom fills in caller identity from SIP participant attributes.
+// Empty values never overwrite an existing number.
+func (s *Store) SetCallerByRoom(ctx context.Context, room, from, to, sipCallID string) (int64, error) {
+	if room == "" {
+		return 0, nil
+	}
+	fromE164, fromRaw := NormalizeCallerNumber(from)
+	toE164, toRaw := NormalizeCallerNumber(to)
+	result, err := s.db.ExecContext(ctx, `
+UPDATE calls
+SET from_number = COALESCE(NULLIF($2, ''), from_number),
+    from_number_raw = COALESCE(NULLIF($3, ''), from_number_raw),
+    to_number = COALESCE(NULLIF($4, ''), to_number),
+    to_number_raw = COALESCE(NULLIF($5, ''), to_number_raw),
+    sip_call_id = COALESCE(NULLIF($6, ''), sip_call_id),
+    source = CASE
+        WHEN COALESCE(NULLIF($2, ''), NULLIF($4, '')) IS NOT NULL THEN 'sip'
+        ELSE source
+    END
+WHERE room_name = $1`, room, fromE164, fromRaw, toE164, toRaw, sipCallID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *Store) Consent(ctx context.Context, id string) (*bool, error) {
@@ -106,6 +209,66 @@ func (s *Store) Consent(ctx context.Context, id string) (*bool, error) {
 	}
 	value := allowed.Bool
 	return &value, nil
+}
+
+func (s *Store) TranscriptConsent(ctx context.Context, id string) (*bool, error) {
+	var allowed sql.NullBool
+	err := s.db.QueryRowContext(ctx,
+		"SELECT transcript_consent FROM calls WHERE id = $1", id).Scan(&allowed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !allowed.Valid {
+		return nil, nil
+	}
+	value := allowed.Bool
+	return &value, nil
+}
+
+// AppendTurn persists one transcript turn only when the call has recorded
+// transcript consent. The consent check lives in the INSERT so a bug in the
+// caller cannot bypass it. Duplicate sequence numbers are ignored, which makes
+// agent retries safe.
+func (s *Store) AppendTurn(ctx context.Context, turn Turn) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+INSERT INTO call_turns (call_id, tenant_id, seq, role, text, latency_ms, tool_name)
+SELECT $1, $2, $3, $4, $5, $6, $7
+WHERE EXISTS (
+    SELECT 1 FROM calls
+    WHERE id = $1 AND tenant_id = $2 AND transcript_consent IS TRUE
+)
+ON CONFLICT (call_id, seq) DO NOTHING`,
+		turn.CallID, turn.TenantID, turn.Seq, turn.Role, turn.Text, turn.LatencyMS, turn.ToolName)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ReapStale closes calls that never received an end event. A crashed agent,
+// a dropped SIP leg, or a missed webhook must not leave a call open forever.
+func (s *Store) ReapStale(ctx context.Context, olderThan time.Duration, tenantID string) (int64, error) {
+	query := `
+UPDATE calls
+SET ended_at = NOW(), outcome = 'abandoned', end_reason = 'reaper'
+WHERE ended_at IS NULL AND started_at < NOW() - make_interval(secs => $1)`
+	args := []any{olderThan.Seconds()}
+	if tenantID != "" {
+		query += " AND tenant_id = $2"
+		args = append(args, tenantID)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 var ErrNotFound = errors.New("call not found")

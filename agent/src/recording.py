@@ -12,15 +12,15 @@ def recording_configured() -> bool:
     return bool(os.getenv("RECORDING_S3_BUCKET"))
 
 
-async def start_consented_recording(ctx, call_id: str) -> bool:
+async def start_consented_recording(ctx, call_id: str) -> str:
     """Start an audio-only, two-channel Egress recording after consent.
 
-    Nothing is recorded before this is called. If storage is not configured we
-    log and skip rather than silently recording somewhere unexpected.
+    Returns the Egress ID, or an empty string when storage is not configured or
+    Egress fails. Nothing is recorded before this is called.
     """
     if not recording_configured():
         logger.warning("recording skipped: RECORDING_S3_BUCKET is not set")
-        return False
+        return ""
 
     request = api.StartEgressRequest(
         room_name=ctx.room.name,
@@ -61,7 +61,20 @@ async def start_consented_recording(ctx, call_id: str) -> bool:
     try:
         info = await ctx.api.egress.start_egress(request)
         logger.info("recording started", extra={"call_id": call_id, "egress_id": info.egress_id})
-        return True
+        return info.egress_id
     except Exception:
         logger.exception("recording failed to start", extra={"call_id": call_id})
+        return ""
+
+
+async def stop_recording(ctx, egress_id: str) -> bool:
+    """Stop an active Egress job. Safe to call if it already ended."""
+    if not egress_id:
+        return True
+    try:
+        await ctx.api.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
+        logger.info("recording stopped", extra={"egress_id": egress_id})
+        return True
+    except Exception:
+        logger.warning("recording stop failed", extra={"egress_id": egress_id}, exc_info=True)
         return False

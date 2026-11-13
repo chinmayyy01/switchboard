@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chinmay/switchboard/internal/auth"
 	"github.com/chinmay/switchboard/internal/jobs"
 	"github.com/chinmay/switchboard/internal/staff"
 )
@@ -48,8 +49,8 @@ func Staff(reg *jobs.Registry) http.HandlerFunc {
 			writeJSON(w, employees)
 
 		case http.MethodPost, http.MethodPut:
-			if !account.IsOwner {
-				http.Error(w, "only the workspace owner can manage employees", http.StatusForbidden)
+			if !account.IsOwner && account.Role != auth.RoleManager {
+				http.Error(w, "owner or manager role required", http.StatusForbidden)
 				return
 			}
 			var payload employeePayload
@@ -88,8 +89,8 @@ func Staff(reg *jobs.Registry) http.HandlerFunc {
 			writeJSON(w, map[string]any{"ok": true, "employee": saved})
 
 		case http.MethodPatch:
-			if !account.IsOwner {
-				http.Error(w, "only the workspace owner can manage employees", http.StatusForbidden)
+			if !account.IsOwner && account.Role != auth.RoleManager {
+				http.Error(w, "owner or manager role required", http.StatusForbidden)
 				return
 			}
 			var payload struct {

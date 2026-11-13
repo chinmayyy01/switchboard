@@ -107,16 +107,44 @@ LiveKit Cloud audio and transcript recording are **off** for every session:
 record={"audio": False, "transcript": False, "traces": True, "logs": True, "redaction": True}
 ```
 
-The agent speaks the approved disclosure, then calls `set_recording_consent`.
-Only when the caller agrees does it start an audio-only, two-channel Egress
-recording to the bucket configured by `RECORDING_S3_*` (India region). If the
-caller declines or is unclear, no recording is started and only the consent
-decision, booking, and minimal call metadata are stored.
+The agent speaks the approved disclosure, then calls `set_recording_consent`
+with independent choices for audio recording and transcript storage. Audio
+recording starts only on an explicit yes and goes to the bucket configured by
+`RECORDING_S3_*` (India region). Declining recording does not block service.
+Transcript turns are written incrementally only when transcript consent is true;
+the check is enforced inside the SQL insert. If both are declined, only the
+consent decision, booking, and minimal call metadata are stored.
 
 Because LiveKit fixes recording options when the session starts, this is the
 only design that can honour a mid-call consent decision.
 
-## 5. Voice input accuracy
+## 5. Caller ID and lifecycle webhooks
+
+The dispatch metadata does not contain the caller's number. The agent waits for
+the SIP participant, then sends `sip.phoneNumber`, `sip.trunkPhoneNumber`, and
+`sip.callID` to the Go bootstrap endpoint. Go stores the normalized E.164 value
+and the raw carrier value. If `HidePhoneNumber` is on, the number is stored as
+unknown and the call continues.
+
+LiveKit Cloud is the lifecycle source of truth. Create one webhook in
+**Settings → Webhooks**:
+
+- **URL:** `https://<your-host>/internal/livekit/webhook`
+- **Signing API key:** the same key as `LIVEKIT_API_KEY`
+
+The handler verifies the signed JWT and the raw-body SHA-256 before parsing,
+then:
+
+- `participant_joined` backfills caller ID from SIP attributes.
+- `room_finished` closes the call as `room_finished`.
+- `egress_started` / `egress_updated` / `egress_ended` are accepted and
+  reserved for recording persistence.
+
+A local reaper closes calls still open after two hours, so a missed webhook or a
+crashed agent does not leave a call open forever. Go needs `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`; without them the endpoint returns 503.
+
+## 6. Voice input accuracy
 
 Phone audio is the weakest link in the demo. Three controls matter:
 
@@ -137,7 +165,7 @@ Phone audio is the weakest link in the demo. Three controls matter:
 If accuracy is still poor on real calls, capture the transcript log lines
 (`caller said: ...`) and tune keyterms and endpointing before changing models.
 
-## 6. Warm transfer
+## 7. Warm transfer
 
 `transfer_to_human` calls Go to persist the escalation and read the tenant's
 manager number, then uses LiveKit's `WarmTransferTask` with the outbound trunk.
@@ -154,18 +182,24 @@ MANAGER_NUMBER=+91...          # or MANAGER_NUMBER_<TENANT>
 If the outbound trunk is missing, the transfer fails safely: the agent tells the
 caller it cannot reach a teammate and offers a callback. It never drops the call.
 
-## 7. Exotel
+## 8. Exotel
 
 When Exotel responds, implement `internal/telephony/exotel.go` with the same
 `Plan` shape and select it with `TELEPHONY_PROVIDER=exotel`. Nothing else in the
 agent or Go API changes. Until then, `FromEnv()` returns the stub, and
 `sip-setup` skips Exotel tenants with `ErrNotConfigured`.
 
-## 8. Tests
+## 9. Tests
 
 - `go test ./internal/telephony` — plan shape and India endpoint.
 - `TEST_DATABASE_URL=... go test ./internal/api -run TestAgentTools` — session
   bootstrap, idempotent booking, consent persistence, token rejection.
+- `TEST_DATABASE_URL=... go test ./internal/calls` — caller ID, turns, recording
+  lifecycle, reaper.
+- `TEST_DATABASE_URL=... go test ./internal/billing` — price table, cap check,
+  idempotent usage.
+- `TEST_DATABASE_URL=... go test ./internal/auth` — Postgres accounts and
+  sessions, spoofed `X-Forwarded-For`.
 - `TEST_DATABASE_URL=... go test ./internal/jobs -run TestPostgres` — durable
   bookings, retries, cancellation, staff seeding.
 

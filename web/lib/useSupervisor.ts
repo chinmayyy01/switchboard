@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const SUP_URL =
-  process.env.NEXT_PUBLIC_SUPERVISOR_WS_URL ??
-  "ws://localhost:8090/ws/supervisor";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 
 export type Turn = { role: string; text: string };
 
@@ -26,15 +24,29 @@ export function useSupervisor() {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const ws = new WebSocket(SUP_URL);
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
-    ws.onmessage = (e) => {
-      if (typeof e.data !== "string") return;
-      setCalls(JSON.parse(e.data) as Call[]);
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch(`${API}/api/calls/live`, { credentials: "include" });
+        if (!response.ok) {
+          if (!cancelled) setConnected(false);
+          return;
+        }
+        const data = (await response.json()) as Call[];
+        if (!cancelled) {
+          setCalls(Array.isArray(data) ? data : []);
+          setConnected(true);
+        }
+      } catch {
+        if (!cancelled) setConnected(false);
+      }
     };
-    return () => ws.close();
+    void load();
+    const timer = setInterval(load, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   return { calls, connected };

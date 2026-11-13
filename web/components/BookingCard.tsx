@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Badge, Card } from "@/components/ui";
-import type { Booking } from "@/lib/useSwitchboard";
+import type { Booking } from "@/lib/booking";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 

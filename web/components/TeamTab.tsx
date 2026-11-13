@@ -63,11 +63,13 @@ export function TeamTab({
   tenant,
   canSwitchTenant,
   canManageStaff,
+  tenants,
   onTenantChange,
 }: {
   tenant: string;
   canSwitchTenant: boolean;
   canManageStaff: boolean;
+  tenants: { id: string; name: string }[];
   onTenantChange: (tenant: string) => void;
 }) {
   const [members, setMembers] = useState<Member[]>([]);
@@ -219,8 +221,11 @@ export function TeamTab({
               aria-label="Business"
               className="min-h-10 rounded-lg border border-[#3A3A3A] bg-[#242424] px-3 py-2 text-sm font-medium text-[#D8D2C7]"
             >
-              <option value="rivera">Rivera Plumbing &amp; HVAC</option>
-              <option value="acme">Acme Home Services</option>
+              {tenants.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
             </select>
           )}
           {canManageStaff && (

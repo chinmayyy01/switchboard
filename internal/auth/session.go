@@ -25,7 +25,14 @@ func FromContext(ctx context.Context) (Account, bool) {
 }
 
 func Disabled() bool {
-	return envBool("AUTH_DISABLED", false)
+	if !envBool("AUTH_DISABLED", false) {
+		return false
+	}
+	// Never let a stray AUTH_DISABLED=true bypass auth in production.
+	if envBool("ALLOW_DEV_AUTH", false) {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "development")
 }
 
 func DevAccount() Account {
@@ -36,9 +43,12 @@ func DevAccount() Account {
 	return Account{
 		ID:            "dev",
 		Email:         "dev@switchboard.local",
+		Name:          "Local preview",
 		TenantID:      tenant,
+		Role:          RoleOwner,
 		IsOwner:       true,
 		FreeCallLimit: 0,
+		EmailVerified: true,
 	}
 }
 
@@ -64,6 +74,31 @@ func RequireAccount(store *Store, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r.WithContext(WithAccount(r.Context(), account)))
+	}
+}
+
+func RequireRole(roles ...string) func(http.HandlerFunc) http.HandlerFunc {
+	allowed := map[string]bool{}
+	for _, role := range roles {
+		allowed[role] = true
+	}
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if Disabled() {
+				next(w, r.WithContext(WithAccount(r.Context(), DevAccount())))
+				return
+			}
+			account, ok := FromContext(r.Context())
+			if !ok {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sign in required"})
+				return
+			}
+			if !allowed[account.Role] {
+				writeJSON(w, http.StatusForbidden, map[string]any{"error": "insufficient role"})
+				return
+			}
+			next(w, r)
+		}
 	}
 }
 
@@ -113,19 +148,51 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func clientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		if i := len(forwarded); i > 0 {
-			for j := 0; j < len(forwarded); j++ {
-				if forwarded[j] == ',' {
-					return forwarded[:j]
-				}
-			}
-			return forwarded
-		}
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
-	return host
+	if !trustedProxy(host) {
+		return host
+	}
+	forwarded := r.Header.Get("X-Forwarded-For")
+	if forwarded == "" {
+		return host
+	}
+	for i := 0; i < len(forwarded); i++ {
+		if forwarded[i] == ',' {
+			return strings.TrimSpace(forwarded[:i])
+		}
+	}
+	return strings.TrimSpace(forwarded)
+}
+
+// trustedProxy only honours X-Forwarded-For when the immediate peer is in
+// TRUSTED_PROXIES. Without that list the header is ignored, so a client cannot
+// spoof its address to reset the login limiter.
+func trustedProxy(host string) bool {
+	raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES"))
+	if raw == "" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if candidate := net.ParseIP(entry); candidate != nil {
+			if candidate.Equal(ip) {
+				return true
+			}
+			continue
+		}
+		if _, network, err := net.ParseCIDR(entry); err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

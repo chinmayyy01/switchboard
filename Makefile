@@ -9,7 +9,7 @@ UV := inference/.venv/bin/uvicorn
 -include .env
 export
 
-.PHONY: ai ollama go go-fake web ingest eval load check smoke sip-plan agent-install agent check-livekit
+.PHONY: ai ollama go go-fake web ingest eval check sip-plan agent-install agent check-livekit retention backfill
 
 agent-install:
 	$(PY312) -m venv agent/.venv
@@ -23,6 +23,12 @@ check-livekit:
 
 sip-plan:
 	GOTOOLCHAIN=local go run ./cmd/sip-setup
+
+retention:
+	go run ./cmd/retention
+
+backfill:
+	go run ./cmd/backfill
 
 ai:
 	PIPER_VOICE=$(PIPER_VOICE) KNOWLEDGE_DIR=$(KNOWLEDGE_DIR) WHISPER_MODEL=$(WHISPER_MODEL) EMBED_MODEL=nomic-embed-text $(UV) app:app --app-dir inference --host 127.0.0.1 --port 8100
@@ -45,12 +51,6 @@ ingest:
 eval:
 	go run ./cmd/eval
 	$(PY) inference/eval_rag.py --tenant rivera --k 3 --gate
-
-load:
-	go run ./cmd/loadgen -n 50 -email "$(LOAD_EMAIL)" -password "$(LOAD_PASSWORD)"
-
-smoke:
-	$(PY) scripts/smoke_sarvam.py
 
 check:
 	go build ./...

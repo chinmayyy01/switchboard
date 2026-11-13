@@ -49,6 +49,13 @@ func LoginHandler(store *Store, attempts *AttemptLimiter, ttl time.Duration, sec
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid email or password"})
 			return
 		}
+		if !account.EmailVerified {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error": "verify your email before signing in",
+				"code":  "verify_required",
+			})
+			return
+		}
 		attempts.Reset(key)
 		token, err := store.CreateSession(r.Context(), account.ID, ttl)
 		if err != nil {

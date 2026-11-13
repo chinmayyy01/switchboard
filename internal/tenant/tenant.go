@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type Telephony struct {
@@ -33,6 +34,7 @@ type Tenant struct {
 }
 
 type Registry struct {
+	mu   sync.RWMutex
 	byID map[string]Tenant
 }
 
@@ -80,11 +82,32 @@ func Load(dir string) (*Registry, error) {
 }
 
 func (r *Registry) Get(id string) (Tenant, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	t, ok := r.byID[id]
 	return t, ok
 }
 
+func (r *Registry) Add(t Tenant) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.byID[t.ID] = t
+}
+
+func (r *Registry) All() []Tenant {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Tenant, 0, len(r.byID))
+	for _, t := range r.byID {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 func (r *Registry) IDs() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]string, 0, len(r.byID))
 	for id := range r.byID {
 		out = append(out, id)

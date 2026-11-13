@@ -12,7 +12,7 @@ export function PhotoCard({
   onSendText,
 }: {
   inCall: boolean;
-  onSendText: (text: string) => boolean;
+  onSendText: (text: string) => boolean | Promise<boolean>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [preview, setPreview] = useState("");
@@ -49,7 +49,8 @@ export function PhotoCard({
       const text = (data.description ?? "").trim();
       if (!text) throw new Error("no description");
       setDescription(text);
-      if (inCall && onSendText(`The caller uploaded a photo. Vision: ${text}`)) {
+      const sent = inCall && (await onSendText(`The caller uploaded a photo. Vision: ${text}`));
+      if (sent) {
         setStatus("sent");
       } else {
         setStatus("error");

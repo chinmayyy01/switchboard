@@ -1,0 +1,21 @@
+{
+  "currency": "INR",
+  "default": {
+    "per_1k_minor": 10,
+    "per_second_minor": 2
+  },
+  "models": {
+    "llm_input:sarvam/sarvam-105b-conversations": { "per_1k_minor": 10 },
+    "llm_output:sarvam/sarvam-105b-conversations": { "per_1k_minor": 20 },
+    "llm_input:google/gemini-3.5-flash": { "per_1k_minor": 5 },
+    "llm_output:google/gemini-3.5-flash": { "per_1k_minor": 15 },
+    "llm_input:openai/gpt-4o-mini": { "per_1k_minor": 12 },
+    "llm_output:openai/gpt-4o-mini": { "per_1k_minor": 48 },
+    "stt_seconds:deepgram/nova-3": { "per_second_minor": 1 },
+    "stt_seconds:sarvam/saaras:v4": { "per_second_minor": 1 },
+    "tts_characters:elevenlabs/eleven_turbo_v2_5": { "per_1k_minor": 18 },
+    "tts_characters:cartesia/sonic-3": { "per_1k_minor": 8 },
+    "tts_characters:sarvam/bulbul:v3": { "per_1k_minor": 6 },
+    "call_seconds:default": { "per_second_minor": 2 }
+  }
+}

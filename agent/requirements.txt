@@ -1,4 +1,5 @@
 livekit-agents[deepgram,openai,elevenlabs,cartesia,silero]~=1.8
 livekit-plugins-google~=1.8
+livekit-plugins-sarvam~=1.8
 python-dotenv
 aiohttp

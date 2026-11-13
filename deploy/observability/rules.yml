@@ -2,12 +2,72 @@ groups:
   - name: switchboard
     rules:
       - alert: HighP95TurnLatency
-        expr: histogram_quantile(0.95, sum(rate(switchboard_turn_latency_seconds_bucket[5m])) by (le)) > 5
+        expr: histogram_quantile(0.95, sum(rate(switchboard_turn_latency_seconds_bucket[5m])) by (le)) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "legacy p95 turn latency above 2s"
+          runbook: "docs/measurements.md"
+
+      - alert: HighAgentP95TurnLatency
+        expr: histogram_quantile(0.95, sum(rate(switchboard_agent_turn_latency_seconds_bucket{stage="e2e"}[5m])) by (le)) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LiveKit agent p95 turn latency above 2s"
+          runbook: "docs/measurements.md"
+
+      - alert: AgentToolErrors
+        expr: increase(switchboard_agent_tool_errors_total[5m]) > 5
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "p95 turn latency above 5s"
+          summary: "agent tool errors above 5 in 5m"
+          runbook: "docs/production-phases.md"
+
+      - alert: ProviderFallbackSpike
+        expr: increase(switchboard_agent_fallbacks_total[5m]) > 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "provider fallbacks above 3 in 5m"
+          runbook: "docs/production-phases.md"
+
+      - alert: RecordingFailures
+        expr: increase(switchboard_recording_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "a consented recording failed to start or store"
+
+      - alert: BillingUnpriced
+        expr: increase(switchboard_billing_unpriced_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "usage recorded for a model missing from the price table"
+
+      - alert: AgentBootstrapFailures
+        expr: increase(switchboard_agent_bootstrap_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the agent could not bootstrap a call"
+
+      - alert: ReapedCalls
+        expr: increase(switchboard_reaped_calls_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "the reaper closed calls that missed an end event"
 
       - alert: EscalationSpike
         expr: increase(switchboard_escalations_total[5m]) > 5

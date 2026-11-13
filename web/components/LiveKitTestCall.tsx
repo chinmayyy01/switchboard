@@ -1,8 +1,10 @@
 "use client";
 
-import type { Booking } from "@/lib/useSwitchboard";
+import { useState } from "react";
+import type { Booking } from "@/lib/booking";
 import type { useLiveKitCall } from "@/lib/useLiveKitCall";
 import { BookingCard } from "@/components/BookingCard";
+import { PhotoCard } from "@/components/PhotoCard";
 import { Badge, Card } from "@/components/ui";
 
 type LiveKitCall = ReturnType<typeof useLiveKitCall>;
@@ -17,13 +19,16 @@ export function LiveKitTestCall({
   call,
   tenant,
   canSwitchTenant,
+  tenants,
   onTenantChange,
 }: {
   call: LiveKitCall;
   tenant: string;
   canSwitchTenant: boolean;
+  tenants: { id: string; name: string }[];
   onTenantChange: (tenant: string) => void;
 }) {
+  const [provider, setProvider] = useState<"default" | "sarvam">("default");
   const connected = call.connected;
   const statusLabel =
     call.status === "idle"
@@ -86,15 +91,31 @@ export function LiveKitTestCall({
               disabled={connected}
               className="w-full rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30 disabled:opacity-50"
             >
-              <option value="rivera">Rivera Plumbing &amp; HVAC</option>
-              <option value="acme">Acme Home Services</option>
+              {tenants.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
             </select>
           </label>
         )}
 
+        <label className="mt-3 block">
+          <span className="mb-1 block text-xs font-medium text-[#A8A092]">Voice stack</span>
+          <select
+            value={provider}
+            onChange={(event) => setProvider(event.target.value as "default" | "sarvam")}
+            disabled={connected}
+            className="w-full rounded-xl border border-[#3A3A3A] bg-[#242424] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30 disabled:opacity-50"
+          >
+            <option value="default">Default · Deepgram + Gemini + Cartesia</option>
+            <option value="sarvam">Sarvam · Saaras + 105B + Bulbul</option>
+          </select>
+        </label>
+
         <button
           type="button"
-          onClick={() => (connected ? void call.end() : void call.start(tenant))}
+          onClick={() => (connected ? void call.end() : void call.start(tenant, provider))}
           className={`mt-5 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#111111] ${
             connected
               ? "bg-rose-600 text-[#EAE5DC] hover:bg-rose-500 focus:ring-rose-300"
@@ -134,6 +155,10 @@ export function LiveKitTestCall({
               <dd className="text-[#D8D2C7]">WebRTC · LiveKit</dd>
             </div>
             <div className="flex justify-between gap-3">
+              <dt className="text-[#A8A092]">Stack</dt>
+              <dd className="text-[#D8D2C7]">{provider === "sarvam" ? "Sarvam" : "Default"}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
               <dt className="text-[#A8A092]">Agent</dt>
               <dd className="text-[#D8D2C7]">
                 {call.agentSpeaking ? "speaking" : connected ? "listening" : "idle"}
@@ -165,6 +190,7 @@ export function LiveKitTestCall({
 
       <div className="space-y-6">
         <BookingCard booking={booking} />
+        <PhotoCard inCall={connected} onSendText={call.sendText} />
 
         <Card className="p-6">
           <div className="flex items-center justify-between gap-3">
@@ -218,7 +244,6 @@ export function LiveKitTestCall({
             <li>
               The agent asks for recording consent first. Audio is recorded only if you agree.
             </li>
-            <li>Photo triage is still only available on the legacy browser stack.</li>
           </ul>
         </Card>
       </div>
