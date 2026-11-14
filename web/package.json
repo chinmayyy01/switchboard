@@ -11,6 +11,7 @@
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
     "@tailwindcss/postcss": "^4.3.3",
+    "livekit-client": "^2.23.0",
     "next": "^16.4.3",
     "postcss": "^8.5.30",
     "react": "^19.3.0",

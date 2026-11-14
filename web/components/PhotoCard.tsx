@@ -12,7 +12,7 @@ export function PhotoCard({
   onSendText,
 }: {
   inCall: boolean;
-  onSendText: (text: string) => boolean;
+  onSendText: (text: string) => boolean | Promise<boolean>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [preview, setPreview] = useState("");
@@ -49,7 +49,8 @@ export function PhotoCard({
       const text = (data.description ?? "").trim();
       if (!text) throw new Error("no description");
       setDescription(text);
-      if (inCall && onSendText(`The caller uploaded a photo. Vision: ${text}`)) {
+      const sent = inCall && (await onSendText(`The caller uploaded a photo. Vision: ${text}`));
+      if (sent) {
         setStatus("sent");
       } else {
         setStatus("error");
@@ -127,7 +128,7 @@ export function PhotoCard({
       )}
 
       {status === "analyzing" && (
-        <p className="mt-3 text-xs text-amber-300">
+        <p className="mt-3 text-xs text-[#D9A45B]">
           Analyzing the photo locally… this can take a few seconds.
         </p>
       )}
@@ -136,7 +137,7 @@ export function PhotoCard({
           {description}
         </p>
       )}
-      {error && <p className="mt-3 text-xs text-rose-300">{error}</p>}
+      {error && <p className="mt-3 text-xs text-[#E08A80]">{error}</p>}
 
       <input
         ref={inputRef}

@@ -25,7 +25,7 @@ export function CallMockup() {
           </div>
         </div>
         <span className="inline-flex shrink-0 items-center gap-2 rounded-full bg-[#2E2E2E] px-2 py-1 text-xs text-[#EAE5DC]/70">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400 motion-reduce:animate-none" />
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#7FBF95] motion-reduce:animate-none" />
           live
         </span>
       </div>
@@ -76,7 +76,7 @@ export function CallMockup() {
             <CheckCircle
               size={16}
               weight="fill"
-              className="text-emerald-400"
+              className="text-[#7FBF95]"
               aria-hidden="true"
             />
             <span className={`${type.caption3} tracking-wide text-[#EAE5DC]/80`}>

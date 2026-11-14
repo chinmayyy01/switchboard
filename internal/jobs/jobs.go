@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -37,24 +38,33 @@ type Slot struct {
 }
 
 type Store struct {
-	mu       sync.Mutex
-	jobs     map[string]*Job
-	counts   map[string]int
-	capacity int
-	seq      int
-	windows  []string
-	Now      func() time.Time
-	Staff    *staff.Registry
+	mu          sync.Mutex
+	jobs        map[string]*Job
+	idempotency map[string]Job
+	counts      map[string]int
+	capacity    int
+	seq         int
+	windows     []string
+	Now         func() time.Time
+	Staff       *staff.Registry
 }
 
 func NewStore() *Store {
 	return &Store{
-		jobs:     map[string]*Job{},
-		counts:   map[string]int{},
-		capacity: 2,
-		windows:  append([]string{}, Windows...),
-		Now:      time.Now,
+		jobs:        map[string]*Job{},
+		idempotency: map[string]Job{},
+		counts:      map[string]int{},
+		capacity:    2,
+		windows:     append([]string{}, Windows...),
+		Now:         time.Now,
 	}
+}
+
+func (s *Store) CurrentTime() time.Time {
+	if s.Now == nil {
+		return time.Now()
+	}
+	return s.Now()
 }
 
 func (s *Store) SetWindows(windows []string) {
@@ -103,17 +113,20 @@ func (s *Store) AvailabilityFor(service, date string) []string {
 	return out
 }
 
+func (s *Store) AvailabilityContext(ctx context.Context, service, date string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.AvailabilityFor(service, date), nil
+}
+
 func (s *Store) Alternatives(service, from string, days int) []Slot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	start, err := time.Parse("2006-01-02", from)
 	if err != nil {
-		now := time.Now
-		if s.Now != nil {
-			now = s.Now
-		}
-		start = now()
+		start = s.CurrentTime()
 	}
 	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
 
@@ -138,7 +151,28 @@ func (s *Store) Alternatives(service, from string, days int) []Slot {
 	return out
 }
 
+func (s *Store) AlternativesContext(ctx context.Context, service, from string, days int) ([]Slot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.Alternatives(service, from, days), nil
+}
+
 func (s *Store) Book(service, date, window, address, phone string) (Job, error) {
+	return s.BookContext(context.Background(), BookingRequest{
+		Service: service,
+		Date:    date,
+		Window:  window,
+		Address: address,
+		Phone:   phone,
+	})
+}
+
+func (s *Store) BookContext(ctx context.Context, request BookingRequest) (Job, error) {
+	if err := ctx.Err(); err != nil {
+		return Job{}, err
+	}
+	service, date, window, address, phone := request.Service, request.Date, request.Window, request.Address, request.Phone
 	service = strings.TrimSpace(service)
 	address = strings.TrimSpace(address)
 	if service == "" || address == "" || date == "" {
@@ -146,6 +180,11 @@ func (s *Store) Book(service, date, window, address, phone string) (Job, error) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if key := strings.TrimSpace(request.IdempotencyKey); key != "" {
+		if existing, ok := s.idempotency[key]; ok {
+			return existing, nil
+		}
+	}
 	if !s.validWindowLocked(window) {
 		return Job{}, ErrInvalid
 	}
@@ -178,6 +217,9 @@ func (s *Store) Book(service, date, window, address, phone string) (Job, error) 
 	}
 	s.jobs[j.ID] = j
 	s.counts[date+"|"+window]++
+	if key := strings.TrimSpace(request.IdempotencyKey); key != "" {
+		s.idempotency[key] = *j
+	}
 	return *j, nil
 }
 
@@ -194,6 +236,13 @@ func (s *Store) ByPhone(phone string) []Job {
 	return out
 }
 
+func (s *Store) ByPhoneContext(ctx context.Context, phone string) ([]Job, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.ByPhone(phone), nil
+}
+
 func (s *Store) Get(id string) (Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,6 +251,14 @@ func (s *Store) Get(id string) (Job, bool) {
 		return Job{}, false
 	}
 	return *j, true
+}
+
+func (s *Store) GetContext(ctx context.Context, id string) (Job, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Job{}, false, err
+	}
+	job, ok := s.Get(id)
+	return job, ok, nil
 }
 
 func (s *Store) Reschedule(id, date, window string) error {
@@ -247,6 +304,13 @@ func (s *Store) Reschedule(id, date, window string) error {
 	return nil
 }
 
+func (s *Store) RescheduleContext(ctx context.Context, id, date, window string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.Reschedule(id, date, window)
+}
+
 func (s *Store) Cancel(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -262,6 +326,67 @@ func (s *Store) Cancel(id string) error {
 		s.Staff.Release(j.EmployeeID, j.Date, j.Window)
 	}
 	j.Status = "cancelled"
+	return nil
+}
+
+func (s *Store) CancelContext(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.Cancel(id)
+}
+
+func (s *Store) EmployeesContext(ctx context.Context) ([]EmployeeWithJobs, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Staff == nil {
+		return []EmployeeWithJobs{}, nil
+	}
+	busy := s.Staff.Busy()
+	employees := s.Staff.Employees()
+	out := make([]EmployeeWithJobs, 0, len(employees))
+	for _, employee := range employees {
+		jobs := busy[employee.ID]
+		if jobs == nil {
+			jobs = []string{}
+		}
+		out = append(out, EmployeeWithJobs{Employee: employee, Busy: jobs})
+	}
+	return out, nil
+}
+
+func (s *Store) SaveEmployeeContext(ctx context.Context, employee staff.Employee) (staff.Employee, error) {
+	if err := ctx.Err(); err != nil {
+		return staff.Employee{}, err
+	}
+	employee, err := staff.Normalize(employee)
+	if err != nil {
+		return staff.Employee{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if employee.ID == "" {
+		employee.ID = newID("emp_")
+	}
+	if s.Staff == nil {
+		s.Staff = staff.New(nil)
+	}
+	s.Staff.Upsert(employee)
+	return employee, nil
+}
+
+func (s *Store) SetEmployeeActiveContext(ctx context.Context, id string, active bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Staff == nil || !s.Staff.SetActive(id, active) {
+		return ErrNotFound
+	}
 	return nil
 }
 

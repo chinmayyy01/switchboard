@@ -29,7 +29,15 @@ export OTEL_TRACES=stdout
 - **Python spans:** FastAPI request spans + urllib (Ollama) spans, as children of
   the Go client span via W3C `traceparent`.
 - **Logs:** JSON via `log/slog`, every line carries `call_id`.
-- **Metrics:** `/metrics` scraped by Prometheus; dashboard + alerts in this folder.
+- **Metrics:** `/metrics` scraped by Prometheus. The dashboard covers the Go
+  path; the agent reports `switchboard_agent_turn_latency_seconds`,
+  `switchboard_agent_tool_errors_total`, `switchboard_agent_fallbacks_total`,
+  `switchboard_recording_failures_total`, and `switchboard_billing_unpriced_total`
+  through Go.
+- **Alerts:** `rules.yml` covers end-to-end p95, tool errors, provider
+  fallbacks, recording failures, bootstrap failures, reaped calls, and unpriced
+  usage. Alerts fire in Prometheus but do not notify until Alertmanager is
+  configured.
 
 ## Notes
 - Prometheus scrapes `host.docker.internal:8090`; on Docker Desktop for macOS this

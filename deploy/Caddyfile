@@ -9,7 +9,9 @@
 		reverse_proxy 127.0.0.1:8090
 	}
 
-	handle /ws* {
+	# Public only for signed LiveKit lifecycle webhooks. Other /internal routes
+	# stay private to the Go process and the agent worker.
+	handle /internal/livekit/* {
 		reverse_proxy 127.0.0.1:8090
 	}
 

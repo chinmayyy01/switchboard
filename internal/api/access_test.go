@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/chinmay/switchboard/internal/auth"
-	"github.com/chinmay/switchboard/internal/hub"
 )
 
 func TestCanSee(t *testing.T) {
@@ -22,12 +21,16 @@ func TestCanSee(t *testing.T) {
 	}
 }
 
-func TestCanSeeCall(t *testing.T) {
+func TestCanSeeTenant(t *testing.T) {
 	account := auth.Account{ID: "a", TenantID: "rivera"}
-	if !canSeeCall(account, hub.Call{Tenant: "rivera", AccountID: "a"}) {
-		t.Fatal("account should see own call")
+	if !canSeeTenant(account, "rivera") {
+		t.Fatal("account should see its tenant")
 	}
-	if canSeeCall(account, hub.Call{Tenant: "rivera", AccountID: "b"}) {
-		t.Fatal("account should not see another call")
+	if canSeeTenant(account, "acme") {
+		t.Fatal("account should not see another tenant")
+	}
+	admin := auth.Account{ID: "d", IsOwner: true}
+	if !canSeeTenant(admin, "acme") {
+		t.Fatal("owner should see any tenant")
 	}
 }

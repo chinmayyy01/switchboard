@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Badge, Card } from "@/components/ui";
-import type { Booking } from "@/lib/useSwitchboard";
+import type { Booking } from "@/lib/booking";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 
@@ -58,9 +58,9 @@ export function BookingCard({ booking }: { booking: Booking }) {
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold tracking-tight text-[#EAE5DC]">
-            Booking
+            Visit details
           </h2>
-          <p className="text-sm text-[#A8A092]">Live from the agent&apos;s tools</p>
+          <p className="text-sm text-[#A8A092]">Details collected during this call</p>
         </div>
         <Badge tone={tone}>{status}</Badge>
       </div>
@@ -83,13 +83,13 @@ export function BookingCard({ booking }: { booking: Booking }) {
             style={{ filter: "invert(0.9) hue-rotate(180deg)" }}
           />
         ) : (
-          <div className="grid h-44 place-items-center px-4 text-center text-xs text-[#8A8379]">
-            The map appears once the agent has the service address.
+          <div className="grid h-28 place-items-center px-4 text-center text-sm text-[#A8A092]">
+            The service address will appear here when it has been confirmed.
           </div>
         )}
       </div>
 
-      <div className="mt-2 flex items-center justify-between text-[11px] text-[#8A8379]">
+      <div className="mt-2 flex items-center justify-between text-[11px] text-[#A8A092]">
         <span>{locating ? "Locating address…" : geo ? geo.display : ""}</span>
         {booking.address && (
           <a
@@ -117,7 +117,7 @@ function Row({
 }) {
   return (
     <div className="flex items-baseline justify-between gap-4">
-      <dt className="text-xs font-medium uppercase tracking-wide text-[#8A8379]">
+      <dt className="text-xs font-medium text-[#A8A092]">
         {label}
       </dt>
       <dd
@@ -150,9 +150,12 @@ function formatWhen(date: string, window: string) {
 }
 
 function formatPhone(phone: string) {
-  const digits = phone.replace(/\D/g, "");
+  let digits = phone.replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91")) {
+    digits = digits.slice(2);
+  }
   if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+    return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
   }
   return phone;
 }

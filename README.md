@@ -2,116 +2,182 @@
 
 [![CI](https://github.com/chinmayyy01/switchboard/actions/workflows/ci.yml/badge.svg)](https://github.com/chinmayyy01/switchboard/actions/workflows/ci.yml)
 
-**An AI voice receptionist for home services.**
+Switchboard is a voice receptionist for home service businesses. It answers calls, books visits from the business schedule, answers policy questions from uploaded documents, and hands a call to a teammate when the caller asks for a person. Calls can arrive through a phone number on LiveKit SIP or from the browser console.
 
-Switchboard answers the phone, books real visits against staff availability, answers policy from tenant documents, and hands the call to a supervisor with the full transcript. It runs on a Go realtime service, a Python AI service, a Next.js console, and Sarvam speech and language models.
-
-![Switchboard landing page](docs/screenshots/landing.png)
-
-> **Status:** portfolio demo snapshot.
-> Browser only. No telephony, recordings, or production data.
-> Auth is temporarily disabled in the local preview with `AUTH_DISABLED=true`; the owner/trial policy remains in code and can be re-enabled.
-> Jobs and staff live in memory and reset on restart.
-> Production hardening is tracked separately from this demo snapshot.
-
-## Contents
-
-- [What it does](#what-it-does)
-- [Case study](docs/case-study.md)
-- [Screenshots](#screenshots)
-- [Quick start](#quick-start)
-- [Architecture](#architecture)
-- [Measurements](#measurements)
-- [Configuration](#configuration)
-- [Commands](#commands)
-- [Project layout](#project-layout)
-- [Limitations](#limitations)
-- [Production readiness](#production-readiness)
-- [Deployment](deploy/README.md)
-- [Credits](#credits)
-
-## What it does
-
-- **Natural voice calls.** Sarvam Bulbul at 22.05 kHz, sentence by sentence TTS, barge in, and short backchannels such as "mm-hmm" and "okay".
-- **Real bookings.** The agent calls tools to check availability, assign a technician by skill and shift, and read back the details before booking.
-- **Alternatives when full.** If no technician is available, the tool returns specific dates and windows and the agent asks the caller to choose.
-- **Grounded policy.** Hours, pricing, warranty, and service area are answered from tenant documents with citations; it refuses when the answer is not grounded.
-- **Warm handoff.** Emergencies and human requests hold the call live for a supervisor instead of hanging up. The supervisor joins a browser audio bridge with the transcript.
-- **Photo triage.** A caller can upload a photo; local vision (`qwen2.5vl`) writes a short description into the conversation.
-- **Tenant aware.** Services, docs, staff, and the console are separated per tenant.
-- **Measured.** Escalation, booking, retrieval, latency, and usage metrics are collected and scored.
+The system has four services. A Go API owns accounts, bookings, calls, transcripts, budgets, and tenant settings. A Python agent joins the LiveKit room and runs the conversation. A Python AI service handles retrieval and vision. A Next.js app provides the landing page and the console. PostgreSQL stores the durable data. Speech, language, and voice models are configured per deployment.
 
 ## Screenshots
 
-### Landing
+Landing page:
 
-![Landing page with Aero Shards](docs/screenshots/landing.png)
+![Landing page](screenshots/landing.png)
 
-### Console
+Console overview, showing call history and phone status:
 
-![Call floor and KPIs](docs/screenshots/console.png)
+![Console overview](screenshots/console.png)
 
-### Test call
+Business settings for services, tone, and the transfer number:
 
-![Browser test call, booking card, and photo triage](docs/screenshots/test-call.png)
+![Business settings](screenshots/business.png)
 
-### Measured call
+Browser test call with the voice stack selector:
 
-![Transcript and booked visit](docs/screenshots/proof.png)
+![Browser test call](screenshots/test-call.png)
 
-## Quick start
+## How a call works
+
+1. A caller joins through LiveKit SIP, or a signed in user starts a browser room from the console.
+2. The agent waits for the caller, reads the SIP phone attributes when present, and asks the Go API to start the call record.
+3. Streaming speech recognition transcribes the caller. Turn detection combines LiveKit's semantic detector with Silero VAD.
+4. The language model calls tools to check services, save an address, check staff availability, offer a visit window, save a callback number, book, reschedule, cancel, or look up policy.
+5. Policy answers come from tenant documents with citations. The agent refuses when the retrieved text does not support an answer.
+6. Text to speech streams the reply. The caller can interrupt at any point.
+7. On a request for a person, the agent transfers to the manager, or holds the room so a teammate can join with the transcript on screen.
+8. Transcript turns are written to PostgreSQL only when the caller agreed. LiveKit webhooks close the call, and a reaper closes calls whose end event was missed.
+
+Calls are not recorded. The agent says it is an assistant and asks whether the caller is comfortable with a saved text transcript. Declining, or not answering clearly, means no turns are stored. The call continues either way.
+
+## What the console does
+
+The console is a single page with these tabs:
+
+* Overview: call counts, containment, recent calls, callers waiting, and phone status.
+* Business: services, visit windows, agent name and tone, languages, disclosure text, transfer number, usage and budget, and business documents.
+* Test a call: browser call with a voice stack selector for the default stack or Sarvam.
+* Live calls: calls waiting for a teammate, with transcript and a join control.
+* Call history: past calls, transcript, and a review control that marks whether a teammate should have joined.
+* Agent quality: handoff precision and recall from the review labels, plus containment.
+* Team: staff who can be assigned visits, with services, weekdays, shifts, and active status.
+* Access: workspace accounts, roles, invites, and removal.
+* Account: sign in details and password change.
+
+Workspace owners can edit Business, documents, budgets, Team, and Access. Managers can use Team and day to day operations. Viewers get read access and two trial calls. The platform operator account can switch between tenants.
+
+## Services
+
+* `cmd/switchboard` runs the Go API on port 8090.
+* `agent/` runs the LiveKit agent worker. It connects outbound to LiveKit Cloud, so it does not need a public port.
+* `inference/` runs the FastAPI AI service on port 8100 for retrieval, embeddings, and vision.
+* `web/` runs the Next.js app on port 3000.
+* PostgreSQL stores accounts, sessions, staff, bookings, calls, turns, labels, usage, and budgets.
+* Ollama provides local embeddings and the vision model.
+* LiveKit Cloud carries WebRTC and SIP media.
+
+## Repository layout
+
+```text
+agent/                 LiveKit agent worker
+cmd/switchboard/       Go entry point and HTTP routes
+cmd/account/           Create owners and trial accounts
+cmd/migrate-auth/      Move SQLite accounts to PostgreSQL
+cmd/backfill/          Import legacy JSONL calls and labels
+cmd/retention/         Delete transcript turns past the retention window
+cmd/eval/              Booking and escalation eval runner
+cmd/sip-setup/         Write LiveKit SIP plans for the carrier
+config/pricing.json    Per model price table
+internal/agent/        Session types used by the eval brain
+internal/booking/      Rule and LLM brains, tools, evals
+internal/billing/      Usage ledger, price table, budget checks
+internal/jobs/         Job store, availability, staff assignment, migrations
+internal/staff/        Staff skills, days, shifts, assignments
+internal/tenant/       Tenant config loader and validation
+internal/api/          HTTP handlers for calls, staff, tenants, docs, budgets, agent tools
+internal/calls/        Call records, turns, transcript consent, reaper
+internal/livekit/      Browser and supervisor tokens, webhook verification
+internal/telephony/    Provider abstraction for Plivo SIP
+internal/auth/         Accounts, sessions, invites, roles, login limits
+internal/inference/    AI service clients
+inference/             FastAPI service, RAG, ingest, embeddings, vision
+web/                   Next.js landing page and console
+screenshots/           README images
+tenants/               Per tenant config, documents, and staff
+deploy/                Caddy, systemd units, single VM guide
+deploy/observability/  Prometheus, Grafana, Jaeger
+.github/workflows/     CI
+```
+
+## Run it locally
 
 ### Requirements
 
-- Go 1.26+
-- Node.js 20+
-- Python 3.12
-- Ollama
-- Make
-- A Sarvam API key, recommended
-- Optional: OpenAI or Deepgram keys
+* Go 1.26 or newer.
+* Node.js 20 or newer.
+* Python 3.12. The agent packages do not support 3.15 yet.
+* PostgreSQL 16 or newer.
+* Ollama.
+* Make.
+* A LiveKit Cloud project with an API key and secret.
+* A Deepgram key for speech recognition.
+* A Gemini or OpenAI key for the language model.
+* A Cartesia or ElevenLabs key for voice.
+* Redis if you run more than one Go process. It is optional for a single process.
 
-### 1. Environment
+### 1. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Set at least:
+Set the LiveKit values, at least one speech provider, one language provider, and one voice provider:
 
 ```bash
-SARVAM_API_KEY=sk_...
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+DEEPGRAM_API_KEY=...
+GEMINI_API_KEY=...
+CARTESIA_API_KEY=...
+AGENT_API_KEY=...
+AGENT_TOKEN_SECRET=...
 ```
 
-The example environment sets `AUTH_DISABLED=false`. This local preview sets `AUTH_DISABLED=true` in `.env`, so the console opens without sign-in. Set it back to `false` to use accounts again.
+`AGENT_TOKEN_SECRET` must differ from `AGENT_API_KEY`. The rest of the environment is documented in `.env.example`.
 
-Without a key, set `STT_PROVIDER=local` and `TTS_PROVIDER=piper` to use Whisper and Piper, and the brain falls back to the hybrid rule state machine. The intended demo path is Sarvam for speech and chat, with Ollama for embeddings and vision.
+### 2. Start PostgreSQL and Redis
 
-### 2. Accounts for when auth is enabled
+The compose file creates a development database that matches `DATABASE_URL` in `.env.example`, plus Redis on port 6379:
+
+```bash
+docker compose -f deploy/development/postgres-compose.yml up -d
+```
+
+Set `REDIS_URL=redis://127.0.0.1:6379/0` to share call and login limits across processes. Without it, limits are kept in memory and the Go service logs a warning. Schema migrations run at startup.
+
+### 3. Accounts, workspaces, and team access
+
+A new business can create a workspace at `http://localhost:3000/signup`. Signup creates a tenant directory, an owner account, an empty staff list, and sends a verification email. After verification the owner lands in their workspace console.
+
+To create an owner in an existing tenant:
 
 ```bash
 go run ./cmd/account -owner -email you@example.com -password 'change-me' -tenant rivera
 ```
 
-`-prune` deletes every non-owner account and session. Create a standard account with 2 free calls:
+To create a teammate directly:
 
 ```bash
-go run ./cmd/account -email teammate@example.com -password 'change-me' -tenant rivera
+go run ./cmd/account -email teammate@example.com -password 'change-me' -tenant rivera -role viewer -name 'Teammate'
 ```
 
-The owner can use every tenant and has no call limit. Every other account is limited to 2 total calls and one active call at a time. These steps are only needed when `AUTH_DISABLED=false`.
+In normal use the owner invites teammates from Access. The invitee opens the emailed link, sets a name and password, verifies their email, and signs in. The roles are owner, manager, and viewer.
 
-### 3. Install the web app
+Without `SMTP_HOST`, invite, verification, and reset links are written to the Go log and returned by the API in development. Production requires `SMTP_HOST`.
+
+Tenant configuration is stored under `tenants/<id>/`. A multi instance deployment needs that directory on shared storage, or a move to PostgreSQL or object storage.
+
+A new workspace starts with generic services and an empty staff list. Add technicians in Team, then edit services, visit windows, agent name and tone, languages, disclosure, and transfer number in Business. Upload policy and FAQ files in Business under Business documents. The console saves them under `tenants/<id>/docs` and rebuilds the index. The command line path also works:
+
+```bash
+inference/.venv/bin/python inference/ingest.py --tenant <id> --docs tenants/<id>/docs
+```
+
+### 4. Install the web app and AI service
 
 ```bash
 cd web
 npm install
 cd ..
-```
 
-### 4. Install the AI service
-
-```bash
 python3.12 -m venv inference/.venv
 inference/.venv/bin/pip install -r inference/requirements.txt
 ```
@@ -123,30 +189,9 @@ ollama pull nomic-embed-text
 ollama pull qwen2.5vl:3b
 ```
 
-Optional, for the local fallback and the experimental LLM brain:
+`nomic-embed-text` is required for document ingest and retrieval. `qwen2.5vl:3b` is used for photo triage. The optional local answer model is `qwen3:1.7b`.
 
-```bash
-ollama pull qwen3:1.7b
-```
-
-### 6. Piper voice for the local fallback
-
-The voice files are not committed. Download a Piper medium voice and point `PIPER_VOICE` at it:
-
-```bash
-mkdir -p inference/voices
-curl -L -o inference/voices/en_US-lessac-medium.onnx \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-curl -L -o inference/voices/en_US-lessac-medium.onnx.json \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
-```
-
-```bash
-PIPER_VOICE=/absolute/path/to/en_US-lessac-medium.onnx
-TTS_RATE=22050
-```
-
-### 7. Build the knowledge base
+### 6. Build the knowledge base
 
 ```bash
 make ingest
@@ -155,74 +200,62 @@ inference/.venv/bin/python inference/ingest.py --tenant acme --docs tenants/acme
 
 Ollama must be running for embeddings.
 
-### 8. Run
+### 7. Start the services
 
-In separate terminals:
+Install the agent environment once:
+
+```bash
+make agent-install
+```
+
+Run each service in its own terminal:
 
 ```bash
 make ollama
 make ai
 make go
 make web
+make agent
 ```
 
-Open:
+Open `http://localhost:3000` for the landing page, `http://localhost:3000/console` for the console, and `http://localhost:3000/console?tab=test` for a browser call. Allow the microphone and use headphones to avoid echo. The voice stack selector chooses the default stack or Sarvam per call.
 
-- Landing: http://localhost:3000
-- Console: http://localhost:3000/console
-- Test call: http://localhost:3000/console?tab=test
-- Sign in, when auth is enabled: http://localhost:3000/login
+A real phone number needs a carrier account, a DID, and applied LiveKit SIP plans. `cmd/sip-setup` writes the plans. Without them the browser console still works.
 
-With auth disabled, open the console and start a call. With auth enabled, sign in with the owner or a trial account. Allow the microphone, use headphones, and press **Start call**. The AI service loads Whisper and Piper at startup; a local model downloads on first run if it is not cached.
-
-### 9. Check
+### 8. Check
 
 ```bash
 make check
 ```
 
-Runs Go build, vet, and tests plus the web type check.
+This runs the Go build, vet, tests, and the web type check. Database tests need `TEST_DATABASE_URL`.
 
-## Architecture
+## Protocol
 
-```mermaid
-flowchart LR
-  Browser["Next.js landing and console"] <-->|"16 kHz PCM + JSON events"| Go["Go realtime :8090"]
-  Go <-->|"HTTP"| AI["Python AI :8100"]
-  Go <-->|"tools, staff, tenants"| Jobs["Job and staff registries"]
-  Go <-->|"chat + tools"| Sarvam["Sarvam 105B"]
-  AI <-->|"STT + TTS"| Sarvam
-  AI <-->|"embeddings + vision"| Ollama["Ollama"]
-  Go -->|"metrics and traces"| Obs["Prometheus, Grafana, OTel"]
-  Supervisor["Supervisor browser"] <-->|"warm transfer bridge"| Go
-```
+LiveKit carries media. The Go and Python services exchange JSON over HTTP:
 
-### Call flow
+* `POST /internal/agent/session` exchanges the agent bootstrap key for a per call token, tenant configuration, and budget decision.
+* `POST /internal/tools/*` accepts the per call token for booking, policy, consent, turns, usage, and escalation.
+* `POST /internal/livekit/webhook` receives signed call lifecycle events.
+* `GET /api/calls/live` and `GET /api/calls/{id}/supervisor-token` support the supervisor handoff.
+* `GET /api/tenant/docs`, `POST /api/tenant/docs`, `DELETE /api/tenant/docs`, and `POST /api/tenant/docs/reindex` manage tenant documents.
+* `GET /api/budget` and `PATCH /api/budget` read and set the monthly usage cap.
 
-1. The browser streams 16 kHz mono PCM in 20 ms frames.
-2. Energy VAD with a 300 ms pre-roll finds the end of the caller's turn.
-3. The AI service transcribes the utterance with Sarvam Saaras, Deepgram, or local Whisper.
-4. The brain runs with tools: check service, save address, check staff availability, set a window, save a phone number, book, reschedule, cancel, or look up policy.
-5. Policy questions are retrieved from tenant documents, answered with citations, and refused when ungrounded.
-6. The reply is split into sentences and synthesized as it is produced.
-7. On escalation, the call is held and flagged; a supervisor can join the live bridge.
-8. The transcript, outcome, signal, and label are stored locally.
+The console receives live transcripts on the `lk.transcription` topic and product events on `switchboard.events`.
 
-### Protocol
+## Staff and availability
 
-One WebSocket per call.
+Staff are seeded from `tenants/<id>/staff.json` the first time a tenant is initialized. After that, manage them in Team. Each employee has a work role, contact details, services, weekdays, shifts, and an active flag. Only active technicians with a matching service can be assigned a visit. Work roles do not grant console access.
 
-- Binary frames: 16 kHz mono Int16 PCM, 320 samples per 20 ms frame.
-- Text frames: JSON control and events such as `call.start`, `interrupt`, `stt.final`, `agent.text`, `tool.call`, `agent.speaking`, `agent.done`, `latency`, `escalation`, and `call.end`.
-- TTS is returned at 22.05 kHz and played at its native rate.
+Bookings, assignments, cancellations, and reschedules are stored in PostgreSQL. Booking transactions lock the schedule and use an idempotency key, so a retry returns the original visit instead of creating a duplicate. This is Switchboard's own job store, not an external calendar or dispatch system.
 
-### Staff and availability
+## Transcripts and retention
 
-Staff are defined in `tenants/<id>/staff.json` with skills, weekdays, and shifts. Availability is computed per service, date, and window. Booking assigns a technician and marks the slot busy; cancel and reschedule release or move it. When nobody is available, the tools return alternatives instead of inventing a slot.
+Transcript turns are stored only when the call has transcript consent. The check is inside the INSERT statement, so an agent bug cannot bypass it. `make retention` deletes turns older than `TRANSCRIPT_RETENTION_DAYS`, which defaults to 180 days. Call records and consent evidence remain after the turns are deleted.
 
-### Tenants
+## Tenants
 
-Each tenant has a config, documents, and staff:
+Each tenant has a configuration file, documents, and staff:
 
 ```text
 tenants/rivera/
@@ -235,161 +268,52 @@ tenants/acme/
   staff.json
 ```
 
-## Measurements
+## Evaluation
 
-Measured on this Mac on the live demo. These are demo numbers, not a benchmark.
+`make eval` runs the booking, handoff, and retrieval suites:
 
-| Area | Result |
-| --- | --- |
-| Booking | 5 of 5 scripted scenarios; live Sarvam smoke call booked end to end |
-| Escalation | precision 0.909, recall 0.909 on 22 labelled calls |
-| Retrieval | recall@1 1.00, recall@3 1.00, MRR 1.00 on 18 questions |
-| Grounding | grounded 0.944, abstention 0.833 on 18 questions |
-| First audio | 0.65 s to 1.3 s server side on the Sarvam smoke call |
-| Local fallback p95 | 1.50 s at 5 calls, 2.83 s at 10 calls, Whisper base and Piper on CPU |
-| Load | 500 fake callers, 0 failures, p95 around 10 ms with fake providers |
-| Usage per 9 turn call | about 20.8k prompt tokens, 415 completion tokens, 920 TTS characters, 24.7 s STT |
+* Booking: 5 of 5 scripted scenarios.
+* Handoff: precision 0.909 and recall 0.909 on 22 authored scenarios.
+* Retrieval: recall at 1 and at 3 is 1.00, with MRR 1.00 on 18 questions.
+* Grounding: 0.944 grounded and 0.833 abstention on 18 questions.
 
-Cost depends on current Sarvam rates. Usage is measured; a rupee cost is not calculated in this demo.
+The handoff numbers come from authored scenarios, not a labelled set of real calls. The console's Agent quality tab uses review labels from actual calls once they exist.
 
 ## Configuration
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `SARVAM_API_KEY` | Sarvam STT, TTS, and chat | empty |
-| `SARVAM_MODEL` | Chat model | `sarvam-105b-conversations` |
-| `SARVAM_STT_MODEL` | Speech to text model | `saaras:v4` |
-| `SARVAM_TTS_MODEL` | Text to speech model | `bulbul:v3` |
-| `SARVAM_TTS_SPEAKER` | Voice | `shubh` |
-| `STT_PROVIDER` | `sarvam`, `deepgram`, or `local` | `sarvam` |
-| `TTS_PROVIDER` | `sarvam` or `piper` | `sarvam` |
-| `DEEPGRAM_API_KEY` | Optional streaming grade STT | empty |
-| `WHISPER_MODEL` | Local Whisper model | `base` |
-| `PIPER_VOICE` | Absolute path to a Piper voice | required for Piper |
-| `TTS_RATE` | Playback sample rate | `22050` |
-| `OPENAI_API_KEY` | Optional full LLM brain | empty |
-| `BRAIN` | Local brain mode | `hybrid` |
-| `OLLAMA_URL` | Ollama endpoint | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Local fallback model | `qwen3:1.7b` |
-| `VISION_MODEL` | Local vision model | `qwen2.5vl:3b` |
-| `INFERENCE_URL` | Python AI service | `http://127.0.0.1:8100` |
-| `NEXT_PUBLIC_WS_URL` | Realtime WebSocket | `ws://localhost:8090/ws` |
-| `NEXT_PUBLIC_API_URL` | Go API | `http://localhost:8090` |
-| `NEXT_PUBLIC_AI_URL` | Python AI | `http://127.0.0.1:8100` |
-| `NEXT_PUBLIC_SITE_URL` | Canonical and social metadata | `http://localhost:3000` |
-| `AUTH_DB` | SQLite accounts and sessions | `data/auth.db` |
-| `AUTH_DISABLED` | Bypass login and use a local owner account | `false` |
-| `DEV_TENANT` | Tenant used by the local owner when auth is disabled | `rivera` |
-| `NEXT_PUBLIC_AUTH_DISABLED` | Show the local-preview banner and copy | `false` |
-| `APP_ORIGIN` | Allowed browser origin for cookies and CORS | `http://localhost:3000,http://127.0.0.1:3000` |
-| `SESSION_TTL` | Session lifetime | `12h` |
-| `COOKIE_SECURE` | Require HTTPS cookies | `false` |
-| `KNOWLEDGE_DIR` | Ingested knowledge directory | `data/knowledge` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP endpoint | empty |
-| `CHAT_MODEL_LARGE` | Optional larger model route | empty |
+The full list is in `.env.example`. The main groups:
 
-Accounts and sessions live in SQLite. The owner account is unlimited; other accounts have a 2-call lifetime quota and one active call at a time. While `AUTH_DISABLED=true`, every request uses a local unlimited owner account, so the quota is bypassed.
+* Core: `APP_ENV`, `APP_ORIGIN`, `APP_BASE_URL`, `SESSION_TTL`, `COOKIE_SECURE`, `TRUSTED_PROXIES`.
+* Database: `DATABASE_URL`, `TEST_DATABASE_URL`, `REDIS_URL`, `AUTH_DRIVER`, `AUTH_DB`.
+* LiveKit: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_AGENT_NAME`, `AGENT_API_KEY`, `AGENT_TOKEN_SECRET`.
+* Speech and language: `DEEPGRAM_API_KEY`, `STT_MODEL`, `STT_FALLBACK_MODEL`, `STT_LANGUAGE`, `STT_ENDPOINTING_MS`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_FALLBACK_MODEL`, `CARTESIA_API_KEY`, `ELEVEN_API_KEY`.
+* Sarvam: `SARVAM_API_KEY`, `SARVAM_MODEL`, `SARVAM_STT_MODEL`, `SARVAM_TTS_MODEL`, `SARVAM_TTS_SPEAKER`.
+* Retrieval and vision: `INFERENCE_URL`, `OLLAMA_URL`, `OLLAMA_MODEL`, `EMBED_MODEL`, `VISION_MODEL`, `KNOWLEDGE_DIR`.
+* Email: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`.
+* Budget and limits: `PRICING_FILE`, `DEFAULT_MONTHLY_CAP_MINOR`, `BUDGET_ACTION`, `MAX_CALL_SECONDS`, `TRANSCRIPT_RETENTION_DAYS`.
+* Web: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_AI_URL`, `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_AUTH_DISABLED`.
 
-The LLM brain selection is automatic: Sarvam if `SARVAM_API_KEY` is set, then OpenAI if `OPENAI_API_KEY` is set, then Ollama via `BRAIN=llm` or the hybrid rule brain.
+Accounts and sessions live in PostgreSQL. The owner account has no call limit. Other accounts have a two call lifetime quota and one active call at a time. `AUTH_DISABLED=true` is ignored outside development unless `ALLOW_DEV_AUTH=true` is set; production always requires authentication.
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `make ollama` | Start Ollama if it is not already running |
-| `make ai` | Python AI service on `:8100` |
-| `make go` | Go realtime service on `:8090` |
-| `make web` | Next.js landing and console on `:3000` |
-| `make ingest` | Ingest Rivera docs into `data/knowledge` |
-| `make eval` | Booking, escalation, and RAG evals |
-| `make smoke` | Live Sarvam call that asserts a booking; needs `SMOKE_EMAIL` and `SMOKE_PASSWORD` |
-| `make load` | 50 concurrent fake callers; needs `LOAD_EMAIL` and `LOAD_PASSWORD` |
-| `make check` | Go build, vet, tests, and web type check |
+* `make ollama`: start Ollama if it is not running.
+* `make ai`: run the Python AI service on port 8100.
+* `make go`: run the Go API on port 8090.
+* `make web`: run the Next.js app on port 3000.
+* `make agent`: run the LiveKit agent worker in development mode.
+* `make agent-install`: create the agent virtual environment and install dependencies.
+* `make ingest`: build the Rivera knowledge index.
+* `make eval`: run the booking, handoff, and retrieval suites.
+* `make sip-plan`: write LiveKit SIP plans for Plivo.
+* `make retention`: delete transcript turns past the retention window.
+* `make backfill`: import legacy `data/calls.jsonl` metadata and labels.
+* `make check`: run the Go build, vet, tests, and web type check.
 
-`make smoke` uses real Sarvam credits. It signs in with `SMOKE_EMAIL` and `SMOKE_PASSWORD`, defaults to the `acme` tenant, and picks a random future date. Use the owner account: standard accounts are limited to 2 calls.
-
-```bash
-SMOKE_EMAIL=you@example.com SMOKE_PASSWORD='...' make smoke
-LOAD_EMAIL=you@example.com LOAD_PASSWORD='...' make load
-```
-
-Restart `make go` first for a clean in-memory job store.
-
-Optional observability:
+Observability is optional:
 
 ```bash
 docker compose -f deploy/observability/docker-compose.yml up -d
 ```
 
-Prometheus runs on `:9090`, Grafana on `:3001`, and Jaeger on `:16686`. This stack is not required for the demo.
-
-## Project layout
-
-```text
-cmd/switchboard/       Go entry point and HTTP routes
-cmd/account/           Create the owner or trial accounts
-cmd/eval/              Booking and escalation eval runner
-cmd/loadgen/           Fake concurrent callers
-internal/agent/        Session, VAD, brains, providers
-internal/booking/      Rule and LLM brains, tools, evals
-internal/jobs/         Job store, availability, staff assignment
-internal/staff/        Staff skills, days, shifts, assignments
-internal/tenant/       Tenant config loader
-internal/ws/           WebSocket handler, hub feed, audio bridge
-internal/api/          Calls, labels, report, staff, geocode
-internal/auth/         Accounts, sessions, quotas, login
-internal/store/        Call records and summaries
-internal/inference/    AI service clients
-inference/             FastAPI AI service, RAG, caching, TTS, STT, evals
-web/                   Next.js landing and single page console
-tenants/               Per tenant config, docs, and staff
-scripts/               Live smoke test
-docs/screenshots/      README screenshots
-docs/case-study.md     Portfolio write-up
-deploy/                Caddy, systemd, and single-VM guide
-deploy/observability/  Prometheus, Grafana, Jaeger
-.github/workflows/     CI
-```
-
-## Limitations
-
-- **Browser only.** No inbound numbers, SIP, Twilio, Telnyx, or outbound campaigns.
-- **Auth is disabled in the local preview.** `AUTH_DISABLED=true` bypasses login and quota; do not deploy with it enabled. When enabled, accounts are invite-only, with no public signup, password reset, or email verification. Standard accounts get 2 lifetime calls; the owner is unlimited.
-- **In memory.** Jobs and staff reset on restart; call records are appended to `data/calls.jsonl`.
-- **No recordings.** Transcripts are kept; audio is not.
-- **No cost caps.** Usage is measured; hard budgets are not enforced.
-- **Single node.** No Redis, Postgres, queue, or automatic failover. The one-call limiter is per process, so multiple Go instances would each allow a call.
-- **Sarvam dependency.** Speech and chat quality and latency depend on the Sarvam API.
-- **Demo data.** Staff, tenants, addresses, and calls are fictional.
-- **Not for emergencies.** Do not point a real emergency line at this demo.
-- **WebGPU.** The landing shards need WebGPU; without it the hero falls back to a flat background.
-
-## Production readiness
-
-This branch is a demo. Before a real phone product:
-
-- [ ] Inbound DIDs and SIP or WebRTC media.
-- [ ] Real transfer with ring groups, paging, hold timeout, and fallback.
-- [ ] Public signup, email verification, password reset, RBAC, and distributed quotas.
-- [ ] Postgres, Redis, and object storage.
-- [ ] Call recordings with consent and retention.
-- [ ] Cost metering, per-tenant budgets, and hard caps.
-- [ ] SLOs, alerts, on call, and incident runbooks.
-- [ ] Compliance: consent, recording disclosure, DPDP, and GDPR.
-
-Production hardening is tracked separately; `main` stays as the portfolio demo snapshot.
-
-## Portfolio
-
-- [Case study](docs/case-study.md): problem, decisions, measured results, tradeoffs.
-- [Deployment guide](deploy/README.md): single VM with Caddy, systemd, and Ollama.
-- [CI](.github/workflows/ci.yml): Go build/vet/race tests, web typecheck/build, Python compile.
-- Live KPI dashboard: the console Overview, plus the Grafana dashboard in `deploy/observability`.
-
-## Credits
-
-- [Sarvam AI](https://www.sarvam.ai) for Saaras, Bulbul, and Sarvam 105B.
-- [React Bits Aero Shards](https://www.reactbits.dev/backgrounds/aero-shards) for the hero background, MIT licensed.
-- [Phosphor Icons](https://phosphoricons.com) for the console and landing icons.
-- [Manrope](https://fonts.google.com/specimen/Manrope) and [Geist Mono](https://fonts.google.com/specimen/Geist+Mono) through `next/font`.
-- Go, Next.js, FastAPI, and Ollama.
+Prometheus runs on port 9090, Grafana on 3001, and Jaeger on 16686.

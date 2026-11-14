@@ -451,7 +451,7 @@ export default function Page() {
                     <CheckCircle
                       size={14}
                       weight="fill"
-                      className="text-emerald-400"
+                      className="text-[#7FBF95]"
                       aria-hidden="true"
                     />
                     Booked

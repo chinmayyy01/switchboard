@@ -2,6 +2,8 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { PasswordInput } from "@/components/PasswordInput";
+import { Alert } from "@/components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
@@ -20,6 +22,8 @@ export default function LoginPage() {
   const [next, setNext] = useState("/console");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [verifyRequired, setVerifyRequired] = useState(false);
+  const [resent, setResent] = useState(false);
 
   useEffect(() => {
     if (authDisabled) {
@@ -42,7 +46,8 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+        setVerifyRequired(data.code === "verify_required");
         setError(data.error ?? "Could not sign in.");
         return;
       }
@@ -90,8 +95,8 @@ export default function LoginPage() {
             Sign in to the console
           </h1>
           <p className="mt-1 text-sm text-[#A8A092]">
-            Bookings, live calls, and the voice agent. Owner accounts are
-            unlimited; other accounts include 2 free calls.
+            Bookings, live calls, and the voice agent. Workspace owners and
+            managers are unlimited; viewers include 2 free calls.
           </p>
 
           <form onSubmit={submit} className="mt-6 space-y-3">
@@ -112,23 +117,17 @@ export default function LoginPage() {
               <span className="mb-1 block text-xs font-medium text-[#A8A092]">
                 Password
               </span>
-              <input
-                type="password"
+              <PasswordInput
                 autoComplete="current-password"
                 required
                 value={password}
-                onChange={(event) => setPassword(event.target.value)}
+                onChange={setPassword}
                 className="w-full rounded-xl border border-[#3A3A3A] bg-[#1A1A1A] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30"
               />
             </label>
 
             {error && (
-              <p
-                aria-live="polite"
-                className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs leading-relaxed text-rose-300"
-              >
-                {error}
-              </p>
+              <Alert tone="error">{error}</Alert>
             )}
 
             <button
@@ -138,11 +137,38 @@ export default function LoginPage() {
             >
               {busy ? "Signing in…" : "Sign in"}
             </button>
+
+            {verifyRequired && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setResent(false);
+                  await fetch(`${API}/api/auth/resend-verification`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email }),
+                  });
+                  setResent(true);
+                }}
+                className="w-full rounded-xl border border-[#3A3A3A] px-4 py-2 text-xs font-medium text-[#D8D2C7] hover:bg-[#242424]"
+              >
+                {resent ? "Verification email sent" : "Resend verification email"}
+              </button>
+            )}
+
+            <div className="flex items-center justify-between text-xs">
+              <Link href="/forgot-password" className="text-[#D98E5A] hover:underline">
+                Forgot password?
+              </Link>
+              <Link href="/signup" className="text-[#D98E5A] hover:underline">
+                Create account
+              </Link>
+            </div>
           </form>
 
           <p className="mt-4 text-center text-[11px] leading-relaxed text-[#8A8379]">
-            Accounts are created by the owner. Standard accounts get 2 free
-            calls.
+            New business? Create a workspace. Teammates can also join with an
+            invite from their owner.
           </p>
         </div>
 

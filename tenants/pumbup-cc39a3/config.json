@@ -1,0 +1,25 @@
+{
+  "id": "pumbup-cc39a3",
+  "name": "PumbUP",
+  "services": [
+    "repair",
+    "installation",
+    "maintenance",
+    "emergency repair"
+  ],
+  "windows": [
+    "morning",
+    "afternoon",
+    "evening"
+  ],
+  "telephony": {},
+  "persona": {
+    "agent_name": "Alex",
+    "tone": "warm, brief, and natural",
+    "languages": [
+      "en",
+      "hi"
+    ]
+  },
+  "disclosure": "Hi! This is an AI voice assistant for PumbUP. I can take your details and book a visit. I can keep a text transcript of this call. Are you comfortable with that, or would you prefer I don't save one?"
+}

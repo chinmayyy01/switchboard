@@ -14,10 +14,13 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 export type Account = {
   id: string;
   email: string;
+  name?: string;
   tenant_id: string;
+  role: "owner" | "manager" | "viewer";
   is_owner: boolean;
   free_call_limit: number;
   calls_used: number;
+  email_verified: boolean;
 };
 
 type SessionState = {

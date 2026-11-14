@@ -2,6 +2,8 @@
 /learning/
 LEARNING.md
 
+/docs/
+
 # --- Go ---
 # Root binary only. Leading slash matters: plain `switchboard` would also match
 # and ignore the source directory cmd/switchboard/.
