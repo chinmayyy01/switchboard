@@ -658,10 +658,10 @@ export default function Page() {
                   }
                 />
                 <Stat
-                  label="Missed requests for help"
+                  label="Help requests caught"
                   value={hasReport ? pct(report!.recall) : "—"}
                   hint={
-                    hasReport ? `${report!.fn} calls` : "Review calls to measure"
+                    hasReport ? `${report!.fn} missed` : "Review calls to measure"
                   }
                 />
                 <Stat

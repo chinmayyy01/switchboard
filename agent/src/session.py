@@ -66,6 +66,15 @@ def _llms(provider: str):
         candidates.append(
             openai.LLM(model=os.getenv("OPENAI_FALLBACK_MODEL", "gpt-4.1-nano"))
         )
+    if provider != "sarvam" and _sarvam_available():
+        # Keep the default stack alive when the primary keys are rate limited
+        # or expired. Sarvam is still opt in per call; this is only a last
+        # resort candidate behind Gemini and OpenAI.
+        from livekit.plugins import sarvam
+
+        model = os.getenv("SARVAM_MODEL", "sarvam-105b-conversations")
+        logger.info("LLM last resort: sarvam/%s", model)
+        candidates.append(sarvam.LLM(model=model))
     if not candidates:
         raise RuntimeError("no LLM provider is configured")
     # Sticky keeps the primary until it actually fails, so a recovered primary
