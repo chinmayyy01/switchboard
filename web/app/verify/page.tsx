@@ -42,9 +42,9 @@ export default function VerifyPage() {
         <p
           className={`mt-3 text-sm ${
             status === "ok"
-              ? "text-emerald-300"
+              ? "text-[#7FBF95]"
               : status === "error"
-                ? "text-rose-300"
+                ? "text-[#E08A80]"
                 : "text-[#A8A092]"
           }`}
         >

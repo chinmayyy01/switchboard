@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Badge, Card, Empty } from "@/components/ui";
+import { Alert, Badge, Card, Empty } from "@/components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 
@@ -125,9 +125,7 @@ export function AccessTab() {
       </header>
 
       {error && (
-        <div role="alert" className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          {error}
-        </div>
+        <Alert tone="error">{error}</Alert>
       )}
 
       <Card className="p-5">
@@ -203,7 +201,7 @@ export function AccessTab() {
                       <button
                         type="button"
                         onClick={() => void remove(account.id)}
-                        className="min-h-9 rounded-lg border border-rose-400/30 px-3 py-1 text-xs text-rose-300 hover:bg-rose-500/10"
+                        className="min-h-9 rounded-lg border border-[#3A3A3A] px-3 py-1 text-xs text-[#E9C2BC] hover:bg-[#2E2E2E]"
                       >
                         Remove
                       </button>

@@ -2,6 +2,8 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { PasswordInput } from "@/components/PasswordInput";
+import { Alert } from "@/components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
@@ -115,23 +117,17 @@ export default function LoginPage() {
               <span className="mb-1 block text-xs font-medium text-[#A8A092]">
                 Password
               </span>
-              <input
-                type="password"
+              <PasswordInput
                 autoComplete="current-password"
                 required
                 value={password}
-                onChange={(event) => setPassword(event.target.value)}
+                onChange={setPassword}
                 className="w-full rounded-xl border border-[#3A3A3A] bg-[#1A1A1A] px-3 py-2.5 text-sm text-[#EAE5DC] outline-none transition focus:border-[#C87941] focus:ring-2 focus:ring-[#C87941]/30"
               />
             </label>
 
             {error && (
-              <p
-                aria-live="polite"
-                className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs leading-relaxed text-rose-300"
-              >
-                {error}
-              </p>
+              <Alert tone="error">{error}</Alert>
             )}
 
             <button

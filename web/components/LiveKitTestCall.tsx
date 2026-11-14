@@ -66,10 +66,10 @@ export function LiveKitTestCall({
             className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${
               call.status === "connected"
                 ? call.agentSpeaking
-                  ? "bg-amber-500/10 text-amber-300"
-                  : "bg-emerald-500/10 text-emerald-300"
+                  ? "bg-[#EAE5DC]/[0.06] text-[#D9A45B]"
+                  : "bg-[#EAE5DC]/[0.06] text-[#7FBF95]"
                 : call.status === "error"
-                  ? "bg-rose-500/10 text-rose-300"
+                  ? "bg-[#EAE5DC]/[0.06] text-[#E08A80]"
                   : "bg-[#2E2E2E] text-[#A8A092]"
             }`}
           >
@@ -118,7 +118,7 @@ export function LiveKitTestCall({
           onClick={() => (connected ? void call.end() : void call.start(tenant, provider))}
           className={`mt-5 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#111111] ${
             connected
-              ? "bg-rose-600 text-[#EAE5DC] hover:bg-rose-500 focus:ring-rose-300"
+              ? "bg-[#8F3B36] text-[#EAE5DC] hover:bg-[#A0453F] focus:ring-[#8F3B36]/40"
               : "bg-[#C87941] text-[#111111] hover:bg-[#D98E5A] focus:ring-[#C87941]/40"
           }`}
         >
@@ -129,13 +129,13 @@ export function LiveKitTestCall({
           <button
             type="button"
             onClick={() => void call.enableAudio()}
-            className="mt-2 w-full rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-200 hover:bg-amber-500/20"
+            className="mt-2 w-full rounded-xl border border-[#3A3A3A] bg-[#2E2E2E] px-4 py-2.5 text-sm font-semibold text-[#EAE5DC] hover:bg-[#3A3A3A]"
           >
             Enable audio
           </button>
         )}
         {call.message && (
-          <p className="mt-2 text-center text-xs text-rose-300">{call.message}</p>
+          <p className="mt-2 text-center text-xs text-[#E08A80]">{call.message}</p>
         )}
         <p className="mt-2 text-center text-xs text-[#8A8379]">
           Your browser will ask for microphone access.

@@ -13,8 +13,13 @@ import (
 	"github.com/chinmay/switchboard/internal/tenant"
 )
 
+// devLink is only returned when a developer has no SMTP server configured.
+// Once SMTP is set up, links must arrive by email and never through the API.
 func devLink(path, token string) string {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "development") {
+		return ""
+	}
+	if mailer.Configured() {
 		return ""
 	}
 	return mailer.Link(path, token)
@@ -192,15 +197,17 @@ func ResendVerificationHandler(store *Store, sender mailer.Sender, attempts *Att
 		if err == nil && !account.EmailVerified {
 			if token, err := store.CreateAuthToken(r.Context(), account.ID, "verify", 24*time.Hour); err == nil {
 				link := mailer.Link("/verify", token)
-				_ = sender.Send(r.Context(), account.Email, "Verify your Switchboard account",
-					"Verify your email:\n"+link+"\n\nThis link expires in 24 hours.")
+				if err := sender.Send(r.Context(), account.Email, "Verify your Switchboard account",
+					"Verify your email:\n"+link+"\n\nThis link expires in 24 hours."); err != nil {
+					slog.Error("send verification email", "email", account.Email, "err", err)
+				}
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-func ForgotPasswordHandler(store *Store, sender mailer.Sender, attempts *AttemptLimiter) http.HandlerFunc {
+func ForgotPasswordHandler(store *Store, sender mailer.Sender, attempts, cooldown *AttemptLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := "forgot|" + clientIP(r)
 		if !attempts.Allow(key) {
@@ -217,13 +224,29 @@ func ForgotPasswordHandler(store *Store, sender mailer.Sender, attempts *Attempt
 		}
 		account, _, err := store.FindByEmail(r.Context(), body.Email)
 		if err == nil {
+			// One email per minute per account. A retry after a lost message
+			// still works, but a double click or refresh cannot send a burst.
+			if cooldown != nil {
+				cooldownKey := "reset|" + account.ID
+				if !cooldown.Allow(cooldownKey) {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				cooldown.Fail(cooldownKey)
+			}
 			if token, err := store.CreateAuthToken(r.Context(), account.ID, "reset", time.Hour); err == nil {
 				link := mailer.Link("/reset-password", token)
-				_ = sender.Send(r.Context(), account.Email, "Reset your Switchboard password",
-					"Reset your password:\n"+link+"\n\nThis link expires in one hour. If you did not ask, ignore this email.")
+				if err := sender.Send(r.Context(), account.Email, "Reset your Switchboard password",
+					"Reset your password:\n"+link+"\n\nThis link expires in one hour. If you did not ask, ignore this email."); err != nil {
+					slog.Error("send reset email", "email", account.Email, "err", err)
+				}
+				if dev := devLink("/reset-password", token); dev != "" {
+					writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dev_link": dev})
+					return
+				}
 			}
 		}
-		// Never reveal whether an account exists.
+		// Never reveal whether an account exists outside development.
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

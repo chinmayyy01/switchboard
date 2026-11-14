@@ -105,8 +105,7 @@ go run ./cmd/account -owner -email you@example.com -password '...' -tenant river
 ```
 
 The browser console uses LiveKit. The Python AI service is still needed for
-policy retrieval and vision, and Ollama supplies embeddings. Local Whisper/Piper
-are a fallback for the legacy inference path, not the LiveKit agent.
+policy retrieval and vision, and Ollama supplies embeddings.
 
 ### 2. Start PostgreSQL and Redis
 
@@ -169,8 +168,9 @@ that directory must be shared/persistent, or move tenant config into object
 storage or PostgreSQL.
 
 A new workspace starts with generic services and an empty staff list. Add
-technicians in **Console → Team**, then add policy documents under
-`tenants/<id>/docs` and run the ingest command for that tenant.
+technicians in **Console → Team**, then edit services, visit windows, persona,
+disclosure, and the transfer number in **Console → Business**. Add policy
+documents under `tenants/<id>/docs` and run the ingest command for that tenant.
 
 ### 4. Install the web app
 
@@ -200,24 +200,7 @@ Optional, for the local fallback and the experimental LLM brain:
 ollama pull qwen3:1.7b
 ```
 
-### 7. Piper voice for the local fallback
-
-The voice files are not committed. Download a Piper medium voice and point `PIPER_VOICE` at it:
-
-```bash
-mkdir -p inference/voices
-curl -L -o inference/voices/en_US-lessac-medium.onnx \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-curl -L -o inference/voices/en_US-lessac-medium.onnx.json \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
-```
-
-```bash
-PIPER_VOICE=/absolute/path/to/en_US-lessac-medium.onnx
-TTS_RATE=22050
-```
-
-### 8. Build the knowledge base
+### 7. Build the knowledge base
 
 ```bash
 make ingest
@@ -226,7 +209,7 @@ inference/.venv/bin/python inference/ingest.py --tenant acme --docs tenants/acme
 
 Ollama must be running for embeddings.
 
-### 9. Run
+### 8. Run
 
 The LiveKit agent needs Python 3.12 or 3.13; the agent dependencies do not yet support 3.15.
 
@@ -258,7 +241,7 @@ microphone, use headphones, and press **Start browser call**. The **Voice
 stack** selector chooses either the default stack (Deepgram + Gemini/OpenAI +
 Cartesia/ElevenLabs) or Sarvam (Saaras + 105B + Bulbul).
 
-### 10. Check
+### 9. Check
 
 ```bash
 make check
@@ -365,21 +348,23 @@ labeled real-call set.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `SARVAM_API_KEY` | Sarvam STT, TTS, and chat | empty |
-| `SARVAM_MODEL` | Chat model | `sarvam-105b-conversations` |
-| `SARVAM_STT_MODEL` | Speech to text model | `saaras:v4` |
-| `SARVAM_TTS_MODEL` | Text to speech model | `bulbul:v3` |
-| `SARVAM_TTS_SPEAKER` | Voice | `shubh` |
-| `STT_PROVIDER` | `sarvam`, `deepgram`, or `local` | `sarvam` |
-| `TTS_PROVIDER` | `sarvam` or `piper` | `sarvam` |
-| `DEEPGRAM_API_KEY` | Optional streaming grade STT | empty |
-| `WHISPER_MODEL` | Local Whisper model | `base` |
-| `PIPER_VOICE` | Absolute path to a Piper voice | required for Piper |
-| `TTS_RATE` | Playback sample rate | `22050` |
-| `OPENAI_API_KEY` | Optional full LLM brain | empty |
-| `BRAIN` | Local brain mode | `hybrid` |
+| `SARVAM_API_KEY` | Sarvam key for the per-call Sarvam stack | empty |
+| `SARVAM_MODEL` | Sarvam chat model | `sarvam-105b-conversations` |
+| `SARVAM_STT_MODEL` | Sarvam speech to text model | `saaras:v4` |
+| `SARVAM_TTS_MODEL` | Sarvam text to speech model | `bulbul:v3` |
+| `SARVAM_TTS_SPEAKER` | Sarvam voice | `shubh` |
+| `DEEPGRAM_API_KEY` | Deepgram STT | empty |
+| `STT_MODEL` / `STT_FALLBACK_MODEL` | Deepgram models | `nova-3` / `nova-2-phonecall` |
+| `STT_LANGUAGE` | STT language | `en-IN` |
+| `STT_ENDPOINTING_MS` | Deepgram endpointing | `200` |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Primary LLM | empty / `gemini-3.5-flash` |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | LLM fallback | empty / `gpt-4o-mini` |
+| `OPENAI_FALLBACK_MODEL` | Second LLM fallback | `gpt-4.1-nano` |
+| `CARTESIA_API_KEY` / `ELEVEN_API_KEY` | TTS providers | empty |
+| `GO_API_URL` | Go API used by the agent | `http://127.0.0.1:8090` |
 | `OLLAMA_URL` | Ollama endpoint | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Local fallback model | `qwen3:1.7b` |
+| `OLLAMA_MODEL` | Local answer model | `qwen3:1.7b` |
+| `EMBED_MODEL` | Embedding model | `nomic-embed-text` |
 | `VISION_MODEL` | Local vision model | `qwen2.5vl:3b` |
 | `INFERENCE_URL` | Python AI service | `http://127.0.0.1:8100` |
 | `NEXT_PUBLIC_API_URL` | Go API | `http://localhost:8090` |
@@ -409,7 +394,6 @@ labeled real-call set.
 | `TRANSCRIPT_RETENTION_DAYS` | Transcript retention | `180` |
 | `KNOWLEDGE_DIR` | Ingested knowledge directory | `data/knowledge` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP endpoint | empty |
-| `CHAT_MODEL_LARGE` | Optional larger model route | empty |
 
 Accounts and sessions live in PostgreSQL. The owner account is unlimited; other accounts have a 2-call lifetime quota and one active call at a time. `AUTH_DISABLED=true` only works when `APP_ENV=development` or `ALLOW_DEV_AUTH=true`; production always requires auth.
 

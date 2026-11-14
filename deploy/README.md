@@ -53,11 +53,7 @@ SMTP_PASSWORD=...
 SMTP_FROM=no-reply@voice.example.com
 APP_BASE_URL=https://voice.example.com
 SARVAM_API_KEY=sk_...
-STT_PROVIDER=sarvam
-TTS_PROVIDER=sarvam
 INFERENCE_URL=http://127.0.0.1:8100
-PIPER_VOICE=/opt/switchboard/inference/voices/en_US-lessac-medium.onnx
-TTS_RATE=22050
 KNOWLEDGE_DIR=/opt/switchboard/data/knowledge
 OLLAMA_URL=http://127.0.0.1:11434
 ```
@@ -83,16 +79,6 @@ sudo -u ollama ollama pull qwen2.5vl:3b
 
 Run the pulls as the user that runs Ollama. On Ubuntu that is usually
 `ollama`; if Ollama runs as `switchboard`, use that user instead.
-
-Download the Piper fallback voice:
-
-```bash
-sudo -u switchboard mkdir -p inference/voices
-sudo -u switchboard curl -L -o inference/voices/en_US-lessac-medium.onnx \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-sudo -u switchboard curl -L -o inference/voices/en_US-lessac-medium.onnx.json \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
-```
 
 ## 4. Build
 

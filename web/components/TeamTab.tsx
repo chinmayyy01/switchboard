@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Badge, Card, Empty } from "@/components/ui";
+import { Alert, Badge, Card, Empty } from "@/components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 const api = (path: string) => `${API}${path}`;
@@ -244,9 +244,7 @@ export function TeamTab({
       </header>
 
       {error && (
-        <div role="alert" className="mb-4 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          {error}
-        </div>
+        <Alert tone="error" className="mb-4">{error}</Alert>
       )}
 
       {form && (

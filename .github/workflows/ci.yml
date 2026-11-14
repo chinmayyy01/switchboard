@@ -66,5 +66,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m py_compile inference/app.py inference/ingest.py inference/rag.py scripts/smoke_sarvam.py
+      - run: python -m py_compile inference/app.py inference/ingest.py inference/rag.py inference/eval_rag.py scripts/check_livekit.py
       - run: python -m py_compile agent/src/*.py

@@ -3,7 +3,6 @@ package tenant
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,14 +56,12 @@ func Provision(dir, name string, exists func(string) bool) (Tenant, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return Tenant{}, err
 	}
-	encoded, err := json.MarshalIndent(cfg, "", "  ")
+	saved, err := Save(dir, cfg)
 	if err != nil {
 		return Tenant{}, err
 	}
-	if err := os.WriteFile(filepath.Join(root, "config.json"), append(encoded, '\n'), 0o644); err != nil {
-		return Tenant{}, err
-	}
-	if err := os.WriteFile(filepath.Join(root, "staff.json"), []byte("[]\n"), 0o644); err != nil {
+	cfg = saved
+	if err := os.WriteFile(filepath.Join(root, "staff.json"), []byte("{\n  \"employees\": []\n}\n"), 0o644); err != nil {
 		return Tenant{}, err
 	}
 	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {

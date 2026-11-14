@@ -1,16 +1,16 @@
 # Switchboard AI service (Python)
 
-FastAPI service that owns all model inference: **STT** (faster-whisper),
-**TTS** (Piper), **embeddings** (Ollama `nomic-embed-text`), and **retrieval**
-(hybrid BM25 + vector with a grounding gate). The Go service talks to it over
-HTTP via `internal/inference` and `internal/ai`.
+FastAPI service for **embeddings** (Ollama `nomic-embed-text`), **retrieval**
+(hybrid BM25 + vector with a grounding gate), and **vision**. The LiveKit agent
+uses its own STT/TTS plugins; the `/stt` and `/tts` routes here are legacy and
+not used by the phone/browser agent. The Go service calls this service for RAG.
 
 ## Endpoints
 
 | Endpoint | In | Out |
 |----------|----|-----|
-| `POST /stt?lang=` | raw PCM s16le mono 16k | `{text, lang, confidence}` |
-| `POST /tts` | `{text, lang}` | raw PCM s16le mono 16k |
+| `POST /stt?lang=` (legacy) | raw PCM s16le mono 16k | `{text, lang, confidence}` |
+| `POST /tts` (legacy) | `{text, lang}` | raw PCM s16le mono 16k |
 | `POST /embed` | `{text}` | `{embedding: [768 floats]}` |
 | `POST /retrieve` | `{tenant, query, k, types?}` | `{grounded, top_score, results[]}` |
 | `POST /answer` | `{tenant, query, k, lang}` | `{grounded, answer, citations, top_score}` |
@@ -22,14 +22,10 @@ HTTP via `internal/inference` and `internal/ai`.
 cd inference
 python3.14 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-export PIPER_VOICE=/absolute/path/to/en_US-amy-low.onnx
-export WHISPER_MODEL=base
 export EMBED_MODEL=nomic-embed-text
 export KNOWLEDGE_DIR=../data/knowledge
 ollama pull nomic-embed-text
 ```
-
-Piper voices: https://huggingface.co/rhasspy/piper-voices
 
 ## Index a tenant
 
@@ -74,6 +70,6 @@ Without `INFERENCE_URL`, the Go service falls back to the fakes.
 ## Notes
 
 - Models lazy-load on first request.
-- `/tts` resamples the voice output to 16 kHz to match the pipeline.
-- The Piper/faster-whisper/nomic APIs can shift between versions; `app.py` and
-  `rag.py` are the files to adjust.
+- The legacy `/tts` route needs `PIPER_VOICE`; the LiveKit agent does not call it.
+- The nomic/vision APIs can shift between versions; `app.py` and `rag.py` are
+  the files to adjust.

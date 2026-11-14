@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { AccessTab } from "@/components/AccessTab";
+import { BusinessTab } from "@/components/BusinessTab";
 import { LiveKitTestCall } from "@/components/LiveKitTestCall";
 import { TeamTab } from "@/components/TeamTab";
 import { Badge, Card, Empty, SectionHeading, Stat } from "@/components/ui";
@@ -15,7 +16,7 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
 const api = (p: string) => `${API}${p}`;
 
-type Tab = "overview" | "test" | "live" | "calls" | "evals" | "team" | "access";
+type Tab = "overview" | "business" | "test" | "live" | "calls" | "evals" | "team" | "access";
 
 type CallRecord = {
   id: string;
@@ -46,6 +47,7 @@ type Report = {
 
 const NAV: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
+  { id: "business", label: "Business" },
   { id: "test", label: "Test a call" },
   { id: "live", label: "Live calls" },
   { id: "calls", label: "Call history" },
@@ -172,6 +174,13 @@ export default function Page() {
   };
 
   const selected = calls.find((c) => c.id === selectedId);
+
+  useEffect(() => {
+    if (!connected || !selectedId) return;
+    if (!calls.some((call) => call.id === selectedId)) {
+      setSelectedId("");
+    }
+  }, [calls, connected, selectedId]);
   const escalatedLive = calls.filter((c) => c.escalated).length;
   const completedRecords = records.filter((record) => record.turns > 0);
   const contained = completedRecords.filter((record) => !record.escalated).length;
@@ -211,7 +220,7 @@ export default function Page() {
         </Link>
 
         <nav aria-label="Main navigation" className="flex-1 space-y-1 px-3">
-          {NAV.filter((item) => item.id !== "access" || account?.role === "owner").map((item) => (
+          {NAV.filter((item) => !["access", "business"].includes(item.id) || account?.role === "owner").map((item) => (
             <button
               key={item.id}
               type="button"
@@ -316,7 +325,7 @@ export default function Page() {
             </div>
           </div>
           <nav aria-label="Main navigation" className="grid grid-cols-3 gap-1 px-3 pb-3">
-            {NAV.filter((item) => item.id !== "access" || account?.role === "owner").map((item) => (
+            {NAV.filter((item) => !["access", "business"].includes(item.id) || account?.role === "owner").map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -335,17 +344,20 @@ export default function Page() {
         </div>
 
         <main className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          <div
-            className={`mb-5 rounded-lg border px-4 py-3 text-sm leading-relaxed ${
-              authDisabled
-                ? "border-[#C87941]/25 bg-[#C87941]/10 text-[#E8C3A4]"
-                : unlimited
-                  ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
-                  : outOfCalls
-                    ? "border-rose-400/20 bg-rose-500/10 text-rose-300"
-                    : "border-[#C87941]/25 bg-[#C87941]/10 text-[#E8C3A4]"
-            }`}
-          >
+          <div className="mb-5 flex items-start gap-2.5 rounded-lg border border-[#3A3A3A] bg-[#1D1D1D] px-4 py-3 text-sm leading-relaxed text-[#A8A092]">
+            <span
+              aria-hidden="true"
+              className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${
+                authDisabled
+                  ? "bg-[#C87941]"
+                  : unlimited
+                    ? "bg-[#7FBF95]"
+                    : outOfCalls
+                      ? "bg-[#E08A80]"
+                      : "bg-[#C87941]"
+              }`}
+            />
+            <span className="min-w-0">
             {authDisabled
               ? "Preview workspace · You can test calls in your browser."
               : unlimited
@@ -353,6 +365,7 @@ export default function Page() {
                 : outOfCalls
                   ? "You have used both trial calls. Contact the workspace owner to continue."
                   : `${remaining} trial calls remaining.`}
+            </span>
           </div>
           {tab === "overview" && (
             <Overview
@@ -401,7 +414,7 @@ export default function Page() {
               />
 
               {selectedId && (
-                <Card className="mb-6 border-emerald-400/30 p-5">
+                <Card className="mb-6 border-[#4E8C63]/50 p-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -429,8 +442,8 @@ export default function Page() {
                   </div>
 
                   {selected?.reason && (
-                    <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-                      <span className="font-medium">Reason for handoff: </span>
+                    <div className="mt-4 rounded-lg border border-[#3A3A3A] bg-[#1D1D1D] px-4 py-3 text-sm text-[#D8D2C7]">
+                      <span className="font-medium text-[#E08A80]">Reason for handoff: </span>
                       {selected.reason}
                     </div>
                   )}
@@ -720,6 +733,15 @@ export default function Page() {
             />
           )}
 
+          {tab === "business" && account?.role === "owner" && (
+            <BusinessTab
+              tenant={activeTenant}
+              tenants={tenantOptions}
+              canSwitchTenant={!!account?.is_owner && !authDisabled}
+              onTenantChange={setTenant}
+            />
+          )}
+
           {tab === "access" && account?.role === "owner" && <AccessTab />}
         </main>
       </div>
@@ -755,11 +777,11 @@ function StatusRow({
 }) {
   const dot =
     tone === "emerald"
-      ? "bg-emerald-500/100"
+      ? "bg-[#7FBF95]"
       : tone === "amber"
-        ? "bg-amber-500/100"
+        ? "bg-[#D9A45B]"
         : tone === "rose"
-          ? "bg-rose-500/100"
+          ? "bg-[#E08A80]"
           : "bg-[#6E675D]";
   return (
     <div className="flex items-center justify-between px-1 py-1 text-xs">
@@ -874,9 +896,9 @@ function Overview({
         />
       </section>
 
-      <section aria-labelledby="phone-line-heading" className="rounded-xl border border-[#C87941]/25 bg-[#C87941]/10 p-4 sm:flex sm:items-center sm:justify-between sm:gap-6">
+      <section aria-labelledby="phone-line-heading" className="rounded-xl border border-[#3A3A3A] bg-[#1D1D1D] p-4 sm:flex sm:items-center sm:justify-between sm:gap-6">
         <div className="flex items-start gap-3">
-          <span aria-hidden="true" className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" />
+          <span aria-hidden="true" className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-[#D9A45B]" />
           <div>
             <h2 id="phone-line-heading" className="text-sm font-semibold text-[#EAE5DC]">
               Your business phone is not connected
@@ -1075,7 +1097,7 @@ function LiveCallCard({
   onTakeOver: () => void;
 }) {
   return (
-    <Card className={`p-5 ${active ? "ring-2 ring-emerald-400/30" : ""}`}>
+    <Card className={`p-5 ${active ? "ring-1 ring-[#4E8C63]/50" : ""}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1092,7 +1114,7 @@ function LiveCallCard({
           <button
             type="button"
             onClick={onTakeOver}
-            className="min-h-10 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-[#EAE5DC] transition-colors hover:bg-emerald-500/100 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+            className="min-h-10 rounded-lg bg-[#C87941] px-4 py-2 text-sm font-semibold text-[#111111] transition-colors hover:bg-[#D98E5A] focus:outline-none focus:ring-2 focus:ring-[#C87941]/40"
           >
             {active ? "Rejoin call" : "Join call"}
           </button>
@@ -1100,7 +1122,7 @@ function LiveCallCard({
       </div>
 
       {call.reason && (
-        <p className="mt-2 text-xs text-rose-300">Reason for handoff: {call.reason}</p>
+        <p className="mt-2 text-xs text-[#E9C2BC]">Reason for handoff: {call.reason}</p>
       )}
 
       <div className="mt-3 space-y-1.5">
@@ -1162,7 +1184,7 @@ function RecordRow({
             onClick={() => onLabel(true)}
             className={`min-h-9 w-full min-w-0 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors ${
               record.label === true
-                ? "bg-rose-600 text-[#EAE5DC]"
+                ? "bg-[#EAE5DC]/[0.08] text-[#EAE5DC] ring-1 ring-[#3A3A3A]"
                 : "bg-[#2E2E2E] text-[#B5AEA3] hover:bg-[#3A3A3A]"
             }`}
           >
@@ -1174,7 +1196,7 @@ function RecordRow({
             onClick={() => onLabel(false)}
             className={`min-h-9 w-full min-w-0 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors ${
               record.label === false
-                ? "bg-emerald-600 text-[#EAE5DC]"
+                ? "bg-[#EAE5DC]/[0.08] text-[#EAE5DC] ring-1 ring-[#3A3A3A]"
                 : "bg-[#2E2E2E] text-[#B5AEA3] hover:bg-[#3A3A3A]"
             }`}
           >
@@ -1247,10 +1269,10 @@ function MatrixCell({
 }) {
   const styles =
     tone === "emerald"
-      ? "bg-emerald-500/10 text-emerald-300 ring-emerald-400/20"
+      ? "bg-[#EAE5DC]/[0.03] text-[#C3DCCB] ring-[#3A3A3A]"
       : tone === "rose"
-        ? "bg-rose-500/10 text-rose-300 ring-rose-400/20"
-        : "bg-amber-500/10 text-amber-300 ring-amber-400/20";
+        ? "bg-[#EAE5DC]/[0.03] text-[#E9C2BC] ring-[#3A3A3A]"
+        : "bg-[#EAE5DC]/[0.03] text-[#E6D2B4] ring-[#3A3A3A]";
   return (
     <div className={`rounded-lg px-2 py-3 ring-1 ${styles}`}>
       <div className="text-lg font-semibold tabular-nums">{value}</div>

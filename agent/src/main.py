@@ -150,6 +150,14 @@ async def entrypoint(ctx: JobContext) -> None:
             receptionist.transferred = True
             ctx.shutdown()
 
+    @ctx.room.on("participant_disconnected")
+    def on_participant_left(participant) -> None:
+        identity = getattr(participant, "identity", "")
+        if identity.startswith("supervisor-"):
+            return
+        logger.info("caller left; closing call", extra={"call_id": cfg.call_id, "participant": identity})
+        ctx.shutdown()
+
     @session.on("conversation_item_added")
     def on_item(ev) -> None:
         item = ev.item
@@ -230,7 +238,13 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception:
             logger.warning("could not report usage", exc_info=True)
 
+    finished = False
+
     async def finish() -> None:
+        nonlocal finished
+        if finished:
+            return
+        finished = True
         if max_task is not None:
             max_task.cancel()
         if receptionist.egress_id:

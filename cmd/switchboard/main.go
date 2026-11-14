@@ -60,6 +60,7 @@ func main() {
 	var redisClient *redis.Client
 	limiter := auth.NewCallLimiter()
 	attempts := auth.NewAttemptLimiter(5, 15*time.Minute)
+	resetCooldown := auth.NewAttemptLimiter(1, time.Minute)
 	if redisURL := strings.TrimSpace(os.Getenv("REDIS_URL")); redisURL != "" {
 		opts, err := redis.ParseURL(redisURL)
 		if err != nil {
@@ -73,6 +74,7 @@ func main() {
 		}
 		limiter = auth.NewRedisCallLimiter(redisClient, 2*time.Hour)
 		attempts = auth.NewRedisAttemptLimiter(redisClient, 5, 15*time.Minute)
+		resetCooldown = auth.NewRedisAttemptLimiter(redisClient, 1, time.Minute)
 		defer redisClient.Close()
 		slog.Info("distributed limiters enabled")
 	} else {
@@ -118,6 +120,7 @@ func main() {
 		slog.Warn("RECORDING_S3_BUCKET is not set; consenting calls will not be recorded")
 	}
 	recordingAPI := &api.RecordingAPI{Calls: callsStore, Storage: recordingStorage}
+	tenantAPI := &api.TenantAPI{Tenants: tenants, Dir: "tenants"}
 
 	pricingPath := strings.TrimSpace(os.Getenv("PRICING_FILE"))
 	if pricingPath == "" {
@@ -177,7 +180,7 @@ func main() {
 	mux.HandleFunc("POST /api/auth/signup", auth.SignupHandler(authStore, mail, attempts, tenants, "tenants"))
 	mux.HandleFunc("POST /api/auth/verify", auth.VerifyHandler(authStore, ttl, secureCookie))
 	mux.HandleFunc("POST /api/auth/resend-verification", auth.ResendVerificationHandler(authStore, mail, attempts))
-	mux.HandleFunc("POST /api/auth/forgot-password", auth.ForgotPasswordHandler(authStore, mail, attempts))
+	mux.HandleFunc("POST /api/auth/forgot-password", auth.ForgotPasswordHandler(authStore, mail, attempts, resetCooldown))
 	mux.HandleFunc("POST /api/auth/reset-password", auth.ResetPasswordHandler(authStore))
 	mux.HandleFunc("GET /api/team/accounts", requireAuth(requireRole(auth.RoleOwner)(auth.TeamAccountsHandler(authStore))))
 	mux.HandleFunc("GET /api/team/invites", requireAuth(requireRole(auth.RoleOwner)(auth.TeamInvitesHandler(authStore))))
@@ -193,6 +196,8 @@ func main() {
 	mux.HandleFunc("GET /api/calls/{id}/supervisor-token", requireAuth(api.SupervisorToken(callsStore)))
 	mux.HandleFunc("GET /api/report", requireAuth(api.Report(callsStore)))
 	mux.HandleFunc("GET /api/tenants", requireAuth(api.Tenants(tenants)))
+	mux.HandleFunc("GET /api/tenant", requireAuth(tenantAPI.Get()))
+	mux.HandleFunc("PATCH /api/tenant", requireAuth(tenantAPI.Update()))
 	mux.HandleFunc("GET /api/geocode", api.Geocode())
 	mux.HandleFunc("GET /api/staff", requireAuth(api.Staff(jobsReg)))
 	mux.HandleFunc("POST /api/staff", requireAuth(requireRole(auth.RoleOwner, auth.RoleManager)(api.Staff(jobsReg))))

@@ -18,10 +18,12 @@ type fakeSender struct {
 	to      string
 	subject string
 	body    string
+	count   int
 }
 
 func (f *fakeSender) Send(_ context.Context, to, subject, body string) error {
 	f.to, f.subject, f.body = to, subject, body
+	f.count++
 	return nil
 }
 
@@ -133,9 +135,20 @@ func TestInviteSignupVerifyAndLogin(t *testing.T) {
 	forgotBody, _ := json.Marshal(map[string]string{"email": email})
 	forgotReq := httptest.NewRequest(http.MethodPost, "/api/auth/forgot-password", bytes.NewReader(forgotBody))
 	forgotRec := httptest.NewRecorder()
-	ForgotPasswordHandler(store, sender, NewAttemptLimiter(20, time.Minute))(forgotRec, forgotReq)
-	if forgotRec.Code != http.StatusNoContent {
+	cooldown := NewAttemptLimiter(1, time.Minute)
+	ForgotPasswordHandler(store, sender, NewAttemptLimiter(20, time.Minute), cooldown)(forgotRec, forgotReq)
+	if forgotRec.Code != http.StatusNoContent && forgotRec.Code != http.StatusOK {
 		t.Fatalf("forgot status=%d", forgotRec.Code)
+	}
+	sentBefore := sender.count
+	// A second request inside the cooldown must not send another email.
+	secondRec := httptest.NewRecorder()
+	ForgotPasswordHandler(store, sender, NewAttemptLimiter(20, time.Minute), cooldown)(secondRec, httptest.NewRequest(http.MethodPost, "/api/auth/forgot-password", bytes.NewReader(forgotBody)))
+	if sender.count != sentBefore {
+		t.Fatalf("cooldown sent %d extra email(s)", sender.count-sentBefore)
+	}
+	if secondRec.Code != http.StatusNoContent {
+		t.Fatalf("cooldown status=%d", secondRec.Code)
 	}
 	resetToken := tokenFromBody(t, sender.body)
 	resetBody, _ := json.Marshal(map[string]string{"token": resetToken, "password": "a new correct horse"})

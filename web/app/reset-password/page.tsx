@@ -2,6 +2,8 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { PasswordInput } from "@/components/PasswordInput";
+import { Alert } from "@/components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 
@@ -47,9 +49,7 @@ export default function ResetPasswordPage() {
         <h1 className="text-xl font-semibold tracking-tight">Choose a new password</h1>
         {done ? (
           <div className="mt-5 space-y-3">
-            <p className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-              Password updated. Sign in with the new password.
-            </p>
+            <Alert tone="success">Password updated. Sign in with the new password.</Alert>
             <Link href="/login" className="block text-center text-sm text-[#D98E5A] hover:underline">
               Sign in
             </Link>
@@ -58,32 +58,28 @@ export default function ResetPasswordPage() {
           <form onSubmit={submit} className="mt-5 space-y-4">
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-[#A8A092]">New password</span>
-              <input
-                type="password"
+              <PasswordInput
                 autoComplete="new-password"
                 required
                 minLength={8}
                 value={password}
-                onChange={(event) => setPassword(event.target.value)}
+                onChange={setPassword}
                 className="w-full rounded-xl border border-[#3A3A3A] bg-[#111111] px-3 py-2.5 text-sm outline-none focus:border-[#C87941]"
               />
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-[#A8A092]">Confirm</span>
-              <input
-                type="password"
+              <PasswordInput
                 autoComplete="new-password"
                 required
                 minLength={8}
                 value={confirm}
-                onChange={(event) => setConfirm(event.target.value)}
+                onChange={setConfirm}
                 className="w-full rounded-xl border border-[#3A3A3A] bg-[#111111] px-3 py-2.5 text-sm outline-none focus:border-[#C87941]"
               />
             </label>
             {error && (
-              <p className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-                {error}
-              </p>
+              <Alert tone="error">{error}</Alert>
             )}
             <button
               type="submit"

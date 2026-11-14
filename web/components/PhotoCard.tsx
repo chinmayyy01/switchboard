@@ -128,7 +128,7 @@ export function PhotoCard({
       )}
 
       {status === "analyzing" && (
-        <p className="mt-3 text-xs text-amber-300">
+        <p className="mt-3 text-xs text-[#D9A45B]">
           Analyzing the photo locally… this can take a few seconds.
         </p>
       )}
@@ -137,7 +137,7 @@ export function PhotoCard({
           {description}
         </p>
       )}
-      {error && <p className="mt-3 text-xs text-rose-300">{error}</p>}
+      {error && <p className="mt-3 text-xs text-[#E08A80]">{error}</p>}
 
       <input
         ref={inputRef}

@@ -2,6 +2,8 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { PasswordInput } from "@/components/PasswordInput";
+import { Alert } from "@/components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 
@@ -19,6 +21,7 @@ export default function SignupPage() {
   const [business, setBusiness] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [devLink, setDevLink] = useState("");
   const [tenantName, setTenantName] = useState("");
@@ -41,6 +44,10 @@ export default function SignupPage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (password !== confirm) {
+      setError("Passwords do not match.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -89,10 +96,10 @@ export default function SignupPage() {
 
           {done ? (
             <div className="mt-5 space-y-3">
-              <p className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+              <Alert tone="success">
                 {tenantName ? `${tenantName} is ready. ` : ""}
                 Check your inbox for the verification link.
-              </p>
+              </Alert>
               {devLink && (
                 <a href={devLink} className="block break-all rounded-xl bg-[#242424] p-3 text-xs text-[#D98E5A] hover:underline">
                   Development: verify now
@@ -153,21 +160,29 @@ export default function SignupPage() {
 
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-[#A8A092]">Password</span>
-                <input
-                  type="password"
+                <PasswordInput
                   autoComplete="new-password"
                   required
                   minLength={8}
                   value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  onChange={setPassword}
                   className="w-full rounded-xl border border-[#3A3A3A] bg-[#111111] px-3 py-2.5 text-sm outline-none focus:border-[#C87941]"
                 />
                 <span className="mt-1 block text-[11px] text-[#8A8379]">At least 8 characters.</span>
               </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-[#A8A092]">Confirm password</span>
+                <PasswordInput
+                  autoComplete="new-password"
+                  required
+                  minLength={8}
+                  value={confirm}
+                  onChange={setConfirm}
+                  className="w-full rounded-xl border border-[#3A3A3A] bg-[#111111] px-3 py-2.5 text-sm outline-none focus:border-[#C87941]"
+                />
+              </label>
               {error && (
-                <p className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-                  {error}
-                </p>
+                <Alert tone="error">{error}</Alert>
               )}
               <button
                 type="submit"

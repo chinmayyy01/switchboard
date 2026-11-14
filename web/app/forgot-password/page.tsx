@@ -2,12 +2,14 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { Alert } from "@/components/ui";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const [devLink, setDevLink] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -24,6 +26,10 @@ export default function ForgotPasswordPage() {
       if (!res.ok && res.status !== 204) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(data.error ?? "Could not send the reset link.");
+      }
+      if (res.status === 200) {
+        const data = (await res.json().catch(() => ({}))) as { dev_link?: string };
+        setDevLink(data.dev_link ?? "");
       }
       setSent(true);
     } catch (err) {
@@ -42,9 +48,12 @@ export default function ForgotPasswordPage() {
         </p>
         {sent ? (
           <div className="mt-5 space-y-3">
-            <p className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-              Check your inbox for the reset link.
-            </p>
+            <Alert tone="success">Check your inbox for the reset link.</Alert>
+            {devLink && (
+              <a href={devLink} className="block break-all rounded-xl bg-[#242424] p-3 text-xs text-[#D98E5A] hover:underline">
+                Development: reset now
+              </a>
+            )}
             <Link href="/login" className="block text-center text-sm text-[#D98E5A] hover:underline">
               Back to sign in
             </Link>
@@ -63,9 +72,7 @@ export default function ForgotPasswordPage() {
               />
             </label>
             {error && (
-              <p className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-                {error}
-              </p>
+              <Alert tone="error">{error}</Alert>
             )}
             <button
               type="submit"
