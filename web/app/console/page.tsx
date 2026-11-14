@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { AccessTab } from "@/components/AccessTab";
+import { AccountTab } from "@/components/AccountTab";
 import { BusinessTab } from "@/components/BusinessTab";
 import { LiveKitTestCall } from "@/components/LiveKitTestCall";
 import { TeamTab } from "@/components/TeamTab";
@@ -16,7 +17,16 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 const authDisabled = process.env.NEXT_PUBLIC_AUTH_DISABLED === "true";
 const api = (p: string) => `${API}${p}`;
 
-type Tab = "overview" | "business" | "test" | "live" | "calls" | "evals" | "team" | "access";
+type Tab =
+  | "overview"
+  | "business"
+  | "test"
+  | "live"
+  | "calls"
+  | "evals"
+  | "team"
+  | "access"
+  | "account";
 
 type CallRecord = {
   id: string;
@@ -32,6 +42,8 @@ type CallRecord = {
 };
 
 type TenantOption = { id: string; name: string };
+
+type PhoneStatus = { connected: boolean; number?: string; provider?: string };
 
 type Report = {
   total: number;
@@ -54,6 +66,7 @@ const NAV: { id: Tab; label: string }[] = [
   { id: "evals", label: "Agent quality" },
   { id: "team", label: "Team" },
   { id: "access", label: "Access" },
+  { id: "account", label: "Account" },
 ];
 
 export default function Page() {
@@ -75,6 +88,7 @@ export default function Page() {
   const [assistantStatus, setAssistantStatus] = useState<
     "checking" | "ready" | "offline"
   >("checking");
+  const [phone, setPhone] = useState<PhoneStatus | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -99,6 +113,18 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    if (!account) return;
+    const id = account.is_owner ? tenant : account.tenant_id;
+    fetch(api(`/api/tenant/phone?tenant=${encodeURIComponent(id)}`), {
+      credentials: "include",
+      cache: "no-store",
+    })
+      .then(async (res) => (res.ok ? ((await res.json()) as PhoneStatus) : { connected: false }))
+      .then(setPhone)
+      .catch(() => setPhone({ connected: false }));
+  }, [account, tenant]);
+
+  useEffect(() => {
     fetch(`${API}/healthz`)
       .then((response) => response.json())
       .then((health) =>
@@ -109,7 +135,7 @@ export default function Page() {
 
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    const allowed = ["overview", "test", "live", "calls", "evals", "team"];
+    const allowed = ["overview", "business", "test", "live", "calls", "evals", "team", "access", "account"];
     if (t && allowed.includes(t)) setTab(t as Tab);
   }, []);
 
@@ -220,7 +246,11 @@ export default function Page() {
         </Link>
 
         <nav aria-label="Main navigation" className="flex-1 space-y-1 px-3">
-          {NAV.filter((item) => !["access", "business"].includes(item.id) || account?.role === "owner").map((item) => (
+          {NAV.filter(
+            (item) =>
+              (!["access", "business"].includes(item.id) || account?.role === "owner") &&
+              (item.id !== "account" || !authDisabled),
+          ).map((item) => (
             <button
               key={item.id}
               type="button"
@@ -263,8 +293,14 @@ export default function Page() {
           />
           <StatusRow
             label="Phone line"
-            value="Not connected"
-            tone="amber"
+            value={
+              phone === null
+                ? "Checking…"
+                : phone.connected
+                  ? phone.number || "Connected"
+                  : "Browser calls only"
+            }
+            tone={phone?.connected ? "emerald" : "slate"}
           />
           <div className="mt-3 border-t border-[#2E2E2E] pt-3">
             <div className="truncate px-1 text-[11px] text-[#B5AEA3]">
@@ -325,7 +361,11 @@ export default function Page() {
             </div>
           </div>
           <nav aria-label="Main navigation" className="grid grid-cols-3 gap-1 px-3 pb-3">
-            {NAV.filter((item) => !["access", "business"].includes(item.id) || account?.role === "owner").map((item) => (
+            {NAV.filter(
+              (item) =>
+                (!["access", "business"].includes(item.id) || account?.role === "owner") &&
+                (item.id !== "account" || !authDisabled),
+            ).map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -372,6 +412,7 @@ export default function Page() {
               calls={calls}
               records={records}
               report={report}
+              phone={phone}
               containment={containment}
               escalatedLive={escalatedLive}
               onGoLive={() => setTab("live")}
@@ -495,7 +536,7 @@ export default function Page() {
           {tab === "calls" && (
             <div>
               <PageHeading
-                badge={`${records.length} recorded`}
+                badge={`${records.length} saved`}
                 title="Call history"
                 subtitle="Review previous conversations and see how each one ended."
                 onGoTest={() => setTab("test")}
@@ -743,6 +784,10 @@ export default function Page() {
           )}
 
           {tab === "access" && account?.role === "owner" && <AccessTab />}
+
+          {tab === "account" && !authDisabled && (
+            <AccountTab email={account?.email} role={account?.role} />
+          )}
         </main>
       </div>
     </div>
@@ -834,6 +879,7 @@ function Overview({
   calls,
   records,
   report,
+  phone,
   containment,
   escalatedLive,
   onGoLive,
@@ -843,6 +889,7 @@ function Overview({
   calls: Call[];
   records: CallRecord[];
   report: Report | null;
+  phone: PhoneStatus | null;
   containment: number;
   escalatedLive: number;
   onGoLive: () => void;
@@ -896,15 +943,16 @@ function Overview({
         />
       </section>
 
+      {phone && !phone.connected && (
       <section aria-labelledby="phone-line-heading" className="rounded-xl border border-[#3A3A3A] bg-[#1D1D1D] p-4 sm:flex sm:items-center sm:justify-between sm:gap-6">
         <div className="flex items-start gap-3">
           <span aria-hidden="true" className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-[#D9A45B]" />
           <div>
             <h2 id="phone-line-heading" className="text-sm font-semibold text-[#EAE5DC]">
-              Your business phone is not connected
+              No phone number connected
             </h2>
             <p className="mt-1 text-sm leading-relaxed text-[#A8A092]">
-              This preview only supports browser calls, so customers cannot call your receptionist yet.
+              Callers cannot reach this workspace by phone yet. Browser test calls still work.
             </p>
           </div>
         </div>
@@ -916,6 +964,7 @@ function Overview({
           Test the receptionist
         </button>
       </section>
+      )}
 
       <div className="grid items-start gap-7 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
         <section>

@@ -35,16 +35,12 @@ class SessionConfig:
 class Settings:
     go_api_url: str
     agent_api_key: str
-    recording_bucket: str
-    recording_region: str
 
 
 def settings() -> Settings:
     return Settings(
         go_api_url=os.getenv("GO_API_URL", "http://127.0.0.1:8090").rstrip("/"),
         agent_api_key=os.getenv("AGENT_API_KEY", ""),
-        recording_bucket=os.getenv("RECORDING_S3_BUCKET", ""),
-        recording_region=os.getenv("RECORDING_S3_REGION", "ap-south-1"),
     )
 
 

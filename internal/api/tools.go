@@ -141,8 +141,8 @@ func disclosure(cfg tenant.Tenant) string {
 		return cfg.Disclosure
 	}
 	return "Hi! This is an AI assistant for " + cfg.Name +
-		". This call can be recorded for quality and service purposes. " +
-		"Are you comfortable with the call being recorded, or would you prefer to continue without recording?"
+		". I can take your details and book a visit. " +
+		"I can keep a text transcript of this call. Are you comfortable with that, or would you prefer I don't save one?"
 }
 
 func (t *Tools) Availability() http.HandlerFunc {
@@ -563,34 +563,28 @@ func (t *Tools) Consent() http.HandlerFunc {
 			return
 		}
 		var body struct {
-			Allowed           *bool  `json:"allowed"`
-			RecordingAllowed  *bool  `json:"recording_allowed"`
 			TranscriptAllowed *bool  `json:"transcript_allowed"`
+			Allowed           *bool  `json:"allowed"`
 			Language          string `json:"language"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			toolError(w, "invalid_request", "I didn't catch that.")
 			return
 		}
-		recording := body.RecordingAllowed
-		if recording == nil {
-			recording = body.Allowed
-		}
-		if recording == nil {
-			toolError(w, "invalid_request", "I need the caller's recording choice.")
-			return
-		}
 		transcript := body.TranscriptAllowed
 		if transcript == nil {
-			transcript = recording
+			transcript = body.Allowed
 		}
-		if err := t.Calls.SetConsent(r.Context(), claims.CallID, *recording, *transcript, body.Language); err != nil {
+		if transcript == nil {
+			toolError(w, "invalid_request", "I need the caller's transcript choice.")
+			return
+		}
+		if err := t.Calls.SetConsent(r.Context(), claims.CallID, *transcript, body.Language); err != nil {
 			toolError(w, "store_unavailable", "I can't save that right now.")
 			return
 		}
 		writeJSON(w, map[string]any{
 			"ok":                 true,
-			"recording_allowed":  *recording,
 			"transcript_allowed": *transcript,
 		})
 	}

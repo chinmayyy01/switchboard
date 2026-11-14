@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Alert, Badge, Card } from "@/components/ui";
+import { BudgetCard } from "@/components/BudgetCard";
+import { DocumentsCard } from "@/components/DocumentsCard";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
 
@@ -254,9 +256,10 @@ export function BusinessTab({
           </Card>
 
           <Card className="p-5">
-            <h2 className="text-base font-semibold text-[#EAE5DC]">Recording disclosure</h2>
+            <h2 className="text-base font-semibold text-[#EAE5DC]">Call disclosure</h2>
             <p className="mt-1 text-xs text-[#8A8379]">
-              Spoken before the first turn. Leave empty to use the default wording.
+              Spoken before the first turn. It should say the assistant is AI and ask
+              about keeping a transcript. Leave empty to use the default wording.
             </p>
             <textarea
               rows={4}
@@ -278,6 +281,10 @@ export function BusinessTab({
           </div>
         </form>
       )}
+
+      <BudgetCard tenant={tenant} />
+
+      <DocumentsCard tenant={tenant} />
     </div>
   );
 }

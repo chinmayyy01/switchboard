@@ -34,7 +34,7 @@ func signWebhookBody(t *testing.T, key, secret string, body []byte) string {
 	return input + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func TestEgressEndedWebhookFinishesRecording(t *testing.T) {
+func TestLiveKitWebhookStoresCallerAndClosesCall(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -55,30 +55,50 @@ func TestEgressEndedWebhookFinishesRecording(t *testing.T) {
 	if err := store.Start(ctx, calls.Call{ID: callID, TenantID: tenantID, RoomName: room}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetConsent(ctx, callID, true, true, "en"); err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := store.StartRecording(ctx, calls.Recording{
-		CallID: callID, TenantID: tenantID, EgressID: "egress-1",
-	}); err != nil || !ok {
-		t.Fatalf("start recording ok=%v err=%v", ok, err)
-	}
 
 	t.Setenv("LIVEKIT_API_KEY", "key")
 	t.Setenv("LIVEKIT_API_SECRET", "secret")
-	body := []byte(`{"event":"egress_ended","room":{"name":"` + room + `"},"egressInfo":{"egressId":"egress-1","roomName":"` + room + `","status":"EGRESS_COMPLETE","file":{"filename":"recordings/x.ogg","duration":5000000000}}}`)
-	req := httptest.NewRequest(http.MethodPost, "/internal/livekit/webhook", bytes.NewReader(body))
-	req.Header.Set("Authorization", signWebhookBody(t, "key", "secret", body))
-	rec := httptest.NewRecorder()
-	LiveKitWebhook(store)(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("webhook status=%d body=%s", rec.Code, rec.Body.String())
+
+	post := func(event string, body string) {
+		t.Helper()
+		payload := []byte(body)
+		req := httptest.NewRequest(http.MethodPost, "/internal/livekit/webhook", bytes.NewReader(payload))
+		req.Header.Set("Authorization", signWebhookBody(t, "key", "secret", payload))
+		rec := httptest.NewRecorder()
+		LiveKitWebhook(store)(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", event, rec.Code, rec.Body.String())
+		}
 	}
-	got, err := store.Recording(ctx, callID, tenantID)
-	if err != nil {
+
+	post("participant_joined", `{
+		"event":"participant_joined",
+		"room":{"name":"`+room+`"},
+		"participant":{"attributes":{
+			"sip.phoneNumber":"+919876543210",
+			"sip.trunkPhoneNumber":"+911140000000",
+			"sip.callID":"sip-1"
+		}}
+	}`)
+	var from, to string
+	if err := db.QueryRowContext(ctx,
+		"SELECT from_number, to_number FROM calls WHERE id = $1", callID,
+	).Scan(&from, &to); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "completed" || got.ObjectKey != "recordings/x.ogg" || got.DurationMS != 5000 {
-		t.Fatalf("recording = %+v", got)
+	if from != "+919876543210" || to != "+911140000000" {
+		t.Fatalf("caller id from=%q to=%q", from, to)
+	}
+
+	post("room_finished", `{"event":"room_finished","room":{"name":"`+room+`"}}`)
+	var outcome string
+	var ended bool
+	if err := db.QueryRowContext(ctx,
+		"SELECT outcome, ended_at IS NOT NULL FROM calls WHERE id = $1", callID,
+	).Scan(&outcome, &ended); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "completed" || !ended {
+		t.Fatalf("outcome=%q ended=%v", outcome, ended)
 	}
 }

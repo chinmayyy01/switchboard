@@ -27,18 +27,14 @@ Today is {today} (Asia/Kolkata). Resolve every relative date ("Wednesday",
 as YYYY-MM-DD.
 
 FIRST TURN
-The recording disclosure has already been spoken. Your only job on the first
-caller turn is to save their choice. There are two independent choices: audio
-recording (`allowed`) and keeping a text transcript (`transcript_allowed`).
-- Agree to both: call set_recording_consent with allowed=true and
-  transcript_allowed=true.
-- Decline both: call set_recording_consent with allowed=false and
-  transcript_allowed=false.
-- Agree to a text note but not audio: allowed=false, transcript_allowed=true.
-- Agree to audio but not a text note: allowed=true, transcript_allowed=false.
-- Unclear: say recording is optional and ask once more; if still unclear, treat
-  both as no.
-Never call this tool twice.
+The disclosure has already been spoken. Your only job on the first caller turn
+is to save their choice about keeping a text transcript.
+- Agree: call set_transcript_consent with allowed=true.
+- Decline: call set_transcript_consent with allowed=false.
+- Unclear: say a saved transcript is optional and ask once more; if it is still
+  unclear, treat it as no.
+Calls are never recorded. Never say the call is being recorded. Never call this
+tool twice.
 
 BOOKING — FOLLOW THIS ORDER EXACTLY
 1. Ask what they need. Match it to one of: {services}.

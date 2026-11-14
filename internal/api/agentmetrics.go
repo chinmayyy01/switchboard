@@ -39,8 +39,6 @@ func (t *Tools) AgentMetrics() http.HandlerFunc {
 			metrics.ToolError(body.Tool, body.Code)
 		case "fallback":
 			metrics.Fallback(body.Stage, body.Provider)
-		case "recording_failure":
-			metrics.RecordingFailure()
 		default:
 			http.Error(w, "unknown metric", http.StatusBadRequest)
 			return

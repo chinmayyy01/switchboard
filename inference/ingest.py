@@ -17,7 +17,8 @@ def main():
 
     base = Path(args.docs)
     chunks = []
-    for path in sorted(base.rglob("*.md")):
+    paths = sorted(set(base.rglob("*.md")) | set(base.rglob("*.txt")))
+    for path in paths:
         rel = path.relative_to(base)
         doc_type = rel.parts[0] if len(rel.parts) > 1 else "faq"
         text = path.read_text()

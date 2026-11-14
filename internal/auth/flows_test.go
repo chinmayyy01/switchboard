@@ -165,6 +165,45 @@ func TestInviteSignupVerifyAndLogin(t *testing.T) {
 	if loginRec.Code != http.StatusOK {
 		t.Fatalf("login after reset status=%d body=%s", loginRec.Code, loginRec.Body.String())
 	}
+
+	// Changing the password from the console requires the current one and
+	// signs out other sessions while keeping the current one.
+	current, err := store.CreateSession(ctx, account.ID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateSession(ctx, account.ID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := func(currentPW, newPW string) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]string{"current_password": currentPW, "new_password": newPW})
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/change-password", bytes.NewReader(b))
+		req = req.WithContext(WithAccount(req.Context(), account))
+		req.AddCookie(&http.Cookie{Name: CookieName, Value: current})
+		rec := httptest.NewRecorder()
+		ChangePasswordHandler(store, NewAttemptLimiter(20, time.Minute))(rec, req)
+		return rec
+	}
+	if rec := change("wrong password", "final correct horse"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("wrong current password status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := change("a new correct horse", "a new correct horse"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("same password status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := change("a new correct horse", "final correct horse"); rec.Code != http.StatusOK {
+		t.Fatalf("change password status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	hash, err := store.PasswordHash(ctx, account.ID)
+	if err != nil || !VerifyPassword(hash, "final correct horse") {
+		t.Fatalf("password was not updated: err=%v", err)
+	}
+	if _, err := store.AccountForToken(ctx, current); err != nil {
+		t.Fatalf("current session should survive: %v", err)
+	}
+	if _, err := store.AccountForToken(ctx, other); err == nil {
+		t.Fatal("other session should be signed out")
+	}
 }
 
 func TestPublicSignupCreatesTenantAndOwner(t *testing.T) {

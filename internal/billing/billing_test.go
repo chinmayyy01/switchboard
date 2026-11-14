@@ -85,3 +85,56 @@ func TestCheckAndRecordIsIdempotent(t *testing.T) {
 		t.Fatalf("exhausted decision = %+v", decision)
 	}
 }
+
+func TestSummaryAndSetBudget(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := jobs.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID := "billing-summary-" + time.Now().Format("150405.000000")
+	t.Cleanup(func() {
+		db.ExecContext(context.Background(), "DELETE FROM tenant_usage WHERE tenant_id = $1", tenantID)
+		db.ExecContext(context.Background(), "DELETE FROM tenant_budgets WHERE tenant_id = $1", tenantID)
+		db.Close()
+	})
+	prices := &Table{
+		Currency: "INR",
+		Models: map[string]Rate{
+			"llm_input:acme/model": {Per1KMinor: 500},
+		},
+	}
+	svc := New(db, prices, 0, "transfer")
+	svc.Now = func() time.Time { return time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC) }
+	if err := svc.SetBudget(ctx, tenantID, 1000, "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Record(ctx, tenantID, "call-1", []UsageItem{
+		{Kind: "llm_input", Model: "acme/model", Units: 1000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := svc.Summary(ctx, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Period != "2026-11" || summary.CapMinor != 1000 || summary.SpentMinor != 500 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if summary.RemainingMinor != 500 || summary.Action != "refuse" || len(summary.Items) != 1 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if summary.Items[0].Kind != "llm_input" || summary.Items[0].CostMinor != 500 {
+		t.Fatalf("items = %+v", summary.Items)
+	}
+	if err := svc.SetBudget(ctx, tenantID, -1, "transfer"); err == nil {
+		t.Fatal("negative cap accepted")
+	}
+	if err := svc.SetBudget(ctx, tenantID, 0, "nonsense"); err == nil {
+		t.Fatal("invalid action accepted")
+	}
+}

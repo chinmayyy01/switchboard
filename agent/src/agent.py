@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from livekit.agents import Agent, RunContext, function_tool
@@ -10,7 +9,6 @@ from config import SessionConfig
 from events import EventPublisher
 from goclient import GoClient
 from prompts import build_instructions
-from recording import start_consented_recording
 from transfer import warm_transfer
 
 logger = logging.getLogger("switchboard.agent")
@@ -32,10 +30,7 @@ class Receptionist(Agent):
         self.events = events or EventPublisher(ctx.room)
         self.turns = turns
         self.consent_decided = False
-        self.recording_allowed = False
         self.transcript_allowed = False
-        self.recording_started = False
-        self.egress_id = ""
         self.transferred = False
 
     @function_tool()
@@ -183,67 +178,34 @@ class Receptionist(Agent):
         )
 
     @function_tool()
-    async def set_recording_consent(
-        self,
-        context: RunContext,
-        allowed: bool,
-        transcript_allowed: bool | None = None,
-    ) -> str:
-        """Record the caller's recording and transcript choice exactly once.
+    async def set_transcript_consent(self, context: RunContext, allowed: bool) -> str:
+        """Save the caller's choice about keeping a text transcript.
 
         Args:
-            allowed: True only if the caller clearly agreed to audio recording.
-            transcript_allowed: True if the caller agreed to a saved text
-                transcript. Omit it for a plain yes or no; it then follows
-                `allowed`.
+            allowed: True only if the caller clearly agreed to a saved text
+                transcript. When they are unclear, treat it as no.
         """
         if self.consent_decided:
-            return "The caller's recording choice is already saved."
+            return "The caller's choice is already saved."
         self.consent_decided = True
-        transcript = allowed if transcript_allowed is None else transcript_allowed
         try:
             data = await self.client.post(
                 "/internal/tools/consent",
                 {
-                    "allowed": allowed,
-                    "recording_allowed": allowed,
-                    "transcript_allowed": transcript,
+                    "transcript_allowed": allowed,
                     "language": str(getattr(context, "language", "") or "en"),
                 },
             )
         except ToolError:
             self.consent_decided = False
             raise
-        self.recording_allowed = bool(data.get("recording_allowed", allowed))
-        self.transcript_allowed = bool(data.get("transcript_allowed", transcript))
+        self.transcript_allowed = bool(data.get("transcript_allowed", allowed))
         if self.turns is not None:
             self.turns.consent_set()
-        await self.events.emit(
-            "consent",
-            allowed=self.recording_allowed,
-            transcript_allowed=self.transcript_allowed,
-        )
-
-        if self.recording_allowed:
-            self.egress_id = await start_consented_recording(self.ctx, self.cfg.call_id)
-            self.recording_started = bool(self.egress_id)
-            if self.recording_started:
-                try:
-                    await self.client.post(
-                        "/internal/tools/recording/started",
-                        {"egress_id": self.egress_id, "channels": 2},
-                    )
-                except ToolError:
-                    logger.warning("could not persist recording start", exc_info=True)
-                return "Recording is on. Thank the caller and ask how you can help."
-            asyncio.create_task(self.client.report_metric("recording_failure"))
-            return (
-                "Consent is saved, but recording is unavailable right now. "
-                "Do not claim the call is being recorded; ask how you can help."
-            )
+        await self.events.emit("consent", transcript_allowed=self.transcript_allowed)
         if self.transcript_allowed:
-            return "Audio recording stays off. I'll keep a text note of the call. Ask how you can help."
-        return "Nothing will be recorded for this call. Thank the caller and ask how you can help."
+            return "A text transcript will be kept. Thank the caller and ask how you can help."
+        return "No transcript will be kept. Ask how you can help."
 
     @function_tool()
     async def end_conversation(self, context: RunContext) -> None:

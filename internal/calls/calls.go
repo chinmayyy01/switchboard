@@ -10,7 +10,7 @@ import (
 // DisclosureVersion identifies the consent wording the caller heard. Bump it
 // whenever the disclosure text changes so stored consent evidence stays
 // interpretable.
-const DisclosureVersion = "2026-11-08"
+const DisclosureVersion = "2026-11-14"
 
 type Call struct {
 	ID           string `json:"id"`
@@ -26,7 +26,6 @@ type Call struct {
 	RoomName     string `json:"room_name"`
 	Outcome      string `json:"outcome"`
 	Escalated    bool   `json:"escalated"`
-	Consent      *bool  `json:"recording_consent,omitempty"`
 	Transcript   *bool  `json:"transcript_consent,omitempty"`
 	ManagerPhone string `json:"manager_number,omitempty"`
 }
@@ -80,20 +79,19 @@ ON CONFLICT (id) DO UPDATE SET
 	return err
 }
 
-// SetConsent stores both decisions. The two consents are independent: a caller
-// can decline audio and still allow a text transcript, or the reverse.
-func (s *Store) SetConsent(ctx context.Context, id string, recording, transcript bool, language string) error {
+// SetConsent stores the caller's transcript decision. No audio is recorded, so
+// there is no recording consent to keep.
+func (s *Store) SetConsent(ctx context.Context, id string, transcript bool, language string) error {
 	if language == "" {
 		language = "en"
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE calls
-SET recording_consent = $2,
-    transcript_consent = $3,
+SET transcript_consent = $2,
     consent_at = NOW(),
-    consent_version = $4,
-    consent_language = $5
-WHERE id = $1`, id, recording, transcript, DisclosureVersion, language)
+    consent_version = $3,
+    consent_language = $4
+WHERE id = $1`, id, transcript, DisclosureVersion, language)
 	if err != nil {
 		return err
 	}
@@ -192,23 +190,6 @@ WHERE room_name = $1`, room, fromE164, fromRaw, toE164, toRaw, sipCallID)
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-func (s *Store) Consent(ctx context.Context, id string) (*bool, error) {
-	var allowed sql.NullBool
-	err := s.db.QueryRowContext(ctx,
-		"SELECT recording_consent FROM calls WHERE id = $1", id).Scan(&allowed)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !allowed.Valid {
-		return nil, nil
-	}
-	value := allowed.Bool
-	return &value, nil
 }
 
 func (s *Store) TranscriptConsent(ctx context.Context, id string) (*bool, error) {
@@ -310,3 +291,14 @@ func (s *Store) Draft(ctx context.Context, callID string) (Draft, error) {
 }
 
 var ErrInvalidField = errors.New("invalid draft field")
+
+// DeleteTranscriptsBefore enforces transcript retention. Calls and consent
+// evidence remain; only the turn text is removed.
+func (s *Store) DeleteTranscriptsBefore(ctx context.Context, before time.Time) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+DELETE FROM call_turns WHERE created_at < $1`, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

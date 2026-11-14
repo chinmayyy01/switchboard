@@ -24,7 +24,6 @@ type WebhookEvent struct {
 	CreatedAt   int64               `json:"createdAt"`
 	Room        *WebhookRoom        `json:"room"`
 	Participant *WebhookParticipant `json:"participant"`
-	EgressInfo  json.RawMessage     `json:"egressInfo"`
 }
 
 type WebhookRoom struct {

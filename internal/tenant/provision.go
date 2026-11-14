@@ -48,8 +48,8 @@ func Provision(dir, name string, exists func(string) bool) (Tenant, error) {
 			Languages: []string{"en", "hi"},
 		},
 		Disclosure: "Hi! This is an AI voice assistant for " + name +
-			". This call can be recorded for quality and service purposes. " +
-			"Are you comfortable with the call being recorded, or would you prefer to continue without recording?",
+			". I can take your details and book a visit. " +
+			"I can keep a text transcript of this call. Are you comfortable with that, or would you prefer I don't save one?",
 	}
 
 	root := filepath.Join(dir, id)

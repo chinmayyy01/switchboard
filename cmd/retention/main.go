@@ -10,7 +10,6 @@ import (
 
 	"github.com/chinmay/switchboard/internal/calls"
 	"github.com/chinmay/switchboard/internal/jobs"
-	"github.com/chinmay/switchboard/internal/storage"
 )
 
 func envDays(name string, fallback int) int {
@@ -26,7 +25,6 @@ func envDays(name string, fallback int) int {
 }
 
 func main() {
-	recordingDays := flag.Int("recordings-days", envDays("RECORDING_RETENTION_DAYS", 30), "audio retention in days")
 	transcriptDays := flag.Int("transcripts-days", envDays("TRANSCRIPT_RETENTION_DAYS", 180), "transcript retention in days")
 	dryRun := flag.Bool("dry-run", false, "report what would be deleted")
 	flag.Parse()
@@ -39,38 +37,6 @@ func main() {
 	}
 	defer db.Close()
 	store := calls.New(db)
-	objects, err := storage.NewFromEnv()
-	if err != nil {
-		slog.Error("storage", "err", err)
-		os.Exit(1)
-	}
-
-	recordingCutoff := time.Now().AddDate(0, 0, -*recordingDays)
-	expired, err := store.ExpiredRecordings(ctx, recordingCutoff)
-	if err != nil {
-		slog.Error("list expired recordings", "err", err)
-		os.Exit(1)
-	}
-	deleted := 0
-	for _, rec := range expired {
-		if *dryRun {
-			slog.Info("would delete recording", "call_id", rec.CallID, "key", rec.ObjectKey)
-			continue
-		}
-		if objects == nil || !objects.Configured() {
-			slog.Error("recording storage is not configured; refusing to mark rows deleted", "call_id", rec.CallID)
-			continue
-		}
-		if err := objects.Delete(ctx, rec.ObjectKey); err != nil {
-			slog.Error("delete object", "call_id", rec.CallID, "key", rec.ObjectKey, "err", err)
-			continue
-		}
-		if err := store.MarkRecordingDeleted(ctx, rec.CallID); err != nil {
-			slog.Error("mark recording deleted", "call_id", rec.CallID, "err", err)
-			continue
-		}
-		deleted++
-	}
 
 	transcriptCutoff := time.Now().AddDate(0, 0, -*transcriptDays)
 	var turns int64
@@ -84,8 +50,6 @@ func main() {
 		}
 	}
 	slog.Info("retention complete",
-		"recordings_expired", len(expired),
-		"recordings_deleted", deleted,
 		"transcript_turns_deleted", turns,
 		"dry_run", *dryRun)
 }

@@ -51,9 +51,6 @@ var (
 	agentBootstrapFailures = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "switchboard_agent_bootstrap_failures_total", Help: "Agent sessions that could not bootstrap.",
 	})
-	recordingFailures = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "switchboard_recording_failures_total", Help: "Recording start or storage failures.",
-	})
 	billingUnpriced = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "switchboard_billing_unpriced_total", Help: "Usage records with no price table entry.",
 	})
@@ -125,7 +122,6 @@ func Fallback(stage, provider string) {
 	agentFallbacks.WithLabelValues(stage, provider).Inc()
 }
 func BootstrapFailure() { agentBootstrapFailures.Inc() }
-func RecordingFailure() { recordingFailures.Inc() }
 func BillingUnpriced()  { billingUnpriced.Inc() }
 func LiveKitCallStarted(source string) {
 	if source == "" {

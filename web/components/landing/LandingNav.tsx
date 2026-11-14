@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { type } from "@/components/landing/type";
 
@@ -34,6 +34,22 @@ function Mark() {
 export function LandingNav() {
   const [open, setOpen] = useState(false);
 
+  // The fixed header and the mobile overlay both need to get out of the way
+  // before the scroll starts, otherwise the browser jumps to the wrong place.
+  const scrollToSection = (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    const target = document.querySelector(href);
+    if (!target) return;
+    event.preventDefault();
+    document.body.style.overflow = "";
+    setOpen(false);
+    window.history.pushState(null, "", href);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({
+      behavior: reduced ? "auto" : "smooth",
+      block: "start",
+    });
+  };
+
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => {
@@ -62,6 +78,7 @@ export function LandingNav() {
               <a
                 key={link.href}
                 href={link.href}
+                onClick={scrollToSection(link.href)}
                 className={`rounded-lg px-3 py-2 text-sm font-medium text-[#A8A092] transition-colors duration-300 ${curve} hover:text-[#EAE5DC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D98E5A] focus-visible:ring-offset-2 focus-visible:ring-offset-[#111111]`}
               >
                 {link.label}
@@ -117,7 +134,7 @@ export function LandingNav() {
             <a
               key={link.href}
               href={link.href}
-              onClick={() => setOpen(false)}
+              onClick={scrollToSection(link.href)}
               style={{ transitionDelay: open ? `${i * 60}ms` : "0ms" }}
               className={`rounded-lg py-3 text-3xl font-semibold tracking-tight text-[#EAE5DC] transition-[transform,opacity] duration-500 ${curve} ${
                 open ? "translate-y-0 opacity-100" : "translate-y-6 opacity-0"

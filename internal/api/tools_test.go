@@ -176,12 +176,12 @@ func TestAgentToolsBookOnceAndRecordConsent(t *testing.T) {
 		t.Fatalf("unexpected status for invalid token: %d", noPhoneSession.Code)
 	}
 
-	consentBody := []byte(`{"allowed":false}`)
+	consentBody := []byte(`{"transcript_allowed":false}`)
 	consent := toolRequest(t, tools.Consent(), "token-secret", session.Token, consentBody)
 	if consent.Code != http.StatusOK {
 		t.Fatalf("consent status=%d body=%s", consent.Code, consent.Body.String())
 	}
-	allowed, err := calls.New(db).Consent(ctx, session.CallID)
+	allowed, err := calls.New(db).TranscriptConsent(ctx, session.CallID)
 	if err != nil || allowed == nil || *allowed {
 		t.Fatalf("consent not persisted as false: %v %v", allowed, err)
 	}
@@ -200,8 +200,8 @@ func TestAgentToolsBookOnceAndRecordConsent(t *testing.T) {
 		t.Fatalf("turn stored without transcript consent: %+v", turnResult)
 	}
 
-	// Recording can stay off while transcript consent is granted.
-	consentTranscript := []byte(`{"recording_allowed":false,"transcript_allowed":true}`)
+	// Transcript consent is granted.
+	consentTranscript := []byte(`{"transcript_allowed":true}`)
 	if got := toolRequest(t, tools.Consent(), "token-secret", session.Token, consentTranscript); got.Code != http.StatusOK {
 		t.Fatalf("transcript consent status=%d body=%s", got.Code, got.Body.String())
 	}

@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -415,6 +416,55 @@ async def embed_endpoint(request: Request):
     if vec is None:
         raise HTTPException(503, "embedding unavailable (is ollama running?)")
     return {"embedding": vec}
+
+
+def _ingest_docs(tenant: str, docs: list) -> dict:
+    from pathlib import Path
+
+    from rag import chunk_doc
+
+    chunks = []
+    for doc in docs:
+        name = str(doc.get("name") or "")
+        text = str(doc.get("text") or "")
+        if not text.strip():
+            continue
+        rel = Path(name)
+        doc_type = rel.parts[0] if len(rel.parts) > 1 else "faq"
+        for part in chunk_doc(text):
+            chunks.append(
+                {
+                    "doc_id": str(rel.with_suffix("")),
+                    "tenant": tenant,
+                    "type": doc_type,
+                    "title": rel.stem,
+                    "text": part,
+                    "vec": embed_text(part),
+                }
+            )
+
+    out = Path(KNOWLEDGE_DIR) / f"{tenant}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"tenant": tenant, "chunks": chunks}, indent=2))
+    embedded = sum(1 for c in chunks if c["vec"])
+    logger.info(
+        "ingested tenant documents",
+        extra={"tenant": tenant, "chunks": len(chunks), "embedded": embedded},
+    )
+    return {"chunks": len(chunks), "embedded": embedded}
+
+
+@app.post("/ingest")
+async def ingest_endpoint(request: Request):
+    data = await request.json()
+    tenant = str(data.get("tenant") or "").strip()
+    docs = data.get("docs") or []
+    if not tenant:
+        raise HTTPException(400, "tenant required")
+    if not re.fullmatch(r"[a-z0-9-]+", tenant):
+        raise HTTPException(400, "invalid tenant")
+    result = await run_in_threadpool(_ingest_docs, tenant, docs)
+    return result
 
 
 @app.post("/retrieve")

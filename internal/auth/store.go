@@ -774,8 +774,26 @@ func (s *Store) SetPassword(ctx context.Context, accountID, password string) err
 	return err
 }
 
+func (s *Store) PasswordHash(ctx context.Context, accountID string) (string, error) {
+	var hash string
+	err := s.queryRow(ctx, "SELECT password_hash FROM accounts WHERE id = ?", accountID).Scan(&hash)
+	return hash, err
+}
+
 func (s *Store) DeleteSessionsForAccount(ctx context.Context, accountID string) error {
 	_, err := s.exec(ctx, "DELETE FROM sessions WHERE account_id = ?", accountID)
+	return err
+}
+
+// DeleteOtherSessions signs out every session except keepToken. An empty
+// keepToken signs out all sessions.
+func (s *Store) DeleteOtherSessions(ctx context.Context, accountID, keepToken string) error {
+	if keepToken == "" {
+		return s.DeleteSessionsForAccount(ctx, accountID)
+	}
+	_, err := s.exec(ctx,
+		"DELETE FROM sessions WHERE account_id = ? AND token_hash <> ?",
+		accountID, hashToken(keepToken))
 	return err
 }
 

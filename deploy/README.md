@@ -149,7 +149,7 @@ Caddy obtains TLS automatically. It proxies:
 
 Create a LiveKit Cloud webhook pointing at
 `https://<your-domain>/internal/livekit/webhook` with the same signing API key
-as `LIVEKIT_API_KEY`. Caller ID, call closure, and recording state depend on it.
+as `LIVEKIT_API_KEY`. Caller ID and call closure depend on it.
 Only the `/internal/livekit/*` prefix is public; the agent tool routes remain
 private. If the agent worker runs in LiveKit Cloud rather than on this VM, it
 must reach `/internal/agent/session` and `/internal/tools/*`. Put the worker on
@@ -179,7 +179,7 @@ address.
 
 ## Notes
 
-- Bookings, staff, calls, transcript turns, labels, recordings metadata, usage,
+- Bookings, staff, calls, transcript turns, labels, usage,
   accounts, and sessions are stored in PostgreSQL.
 - Set `REDIS_URL` when running more than one Go process; call and login limits
   are shared through Redis. Without it they are per process.
@@ -189,7 +189,7 @@ address.
   `/opt/switchboard/tenants` is writable by the service user and backed up.
   Multiple Go instances need a shared volume or tenant config moved to a
   database/object store.
-- Recording requires `RECORDING_S3_*` and `RECORDING_S3_BUCKET`; without it the
-  agent tells the caller recording is unavailable.
+- Calls are never recorded. Only transcript turns are stored, and only when the
+  caller consents; `cmd/retention` deletes them after 180 days by default.
 - A real phone number still needs carrier KYC and the reviewed LiveKit SIP
   plans. SMS is not part of this version.

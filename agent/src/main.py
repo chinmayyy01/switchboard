@@ -14,7 +14,6 @@ from livekit.agents import AgentServer, JobContext, UserInputTranscribedEvent, u
 from agent import Receptionist
 from config import SessionConfig, session_config, settings
 from goclient import GoClient
-from recording import stop_recording
 from session import build_session
 from turns import TurnRecorder
 
@@ -125,8 +124,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
     watch_fallbacks()
 
-    # LiveKit Cloud audio and transcripts stay off. Recording only starts after
-    # the caller explicitly consents, and goes to our own India bucket.
+    # Calls are never recorded. LiveKit's own audio and transcript capture stay
+    # off; the Go service stores turns only when the caller consents.
     started_at = time.monotonic()
     await session.start(
         agent=receptionist,
@@ -247,20 +246,6 @@ async def entrypoint(ctx: JobContext) -> None:
         finished = True
         if max_task is not None:
             max_task.cancel()
-        if receptionist.egress_id:
-            stopped = await stop_recording(ctx, receptionist.egress_id)
-            if not stopped:
-                asyncio.create_task(client.report_metric("recording_failure"))
-            try:
-                await client.post(
-                    "/internal/tools/recording/stopped",
-                    {
-                        "egress_id": receptionist.egress_id,
-                        "error": "" if stopped else "stop failed",
-                    },
-                )
-            except Exception:
-                logger.warning("could not persist recording stop", exc_info=True)
         await turns.close()
         await report_usage()
         try:

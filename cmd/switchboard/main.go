@@ -26,7 +26,6 @@ import (
 	"github.com/chinmay/switchboard/internal/metrics"
 	"github.com/chinmay/switchboard/internal/obs"
 	"github.com/chinmay/switchboard/internal/openai"
-	"github.com/chinmay/switchboard/internal/storage"
 	"github.com/chinmay/switchboard/internal/tenant"
 	"github.com/redis/go-redis/v9"
 )
@@ -111,16 +110,8 @@ func main() {
 	}
 	callsStore := calls.New(bookingDB)
 	calls.StartReaper(ctx, callsStore, 5*time.Minute, 2*time.Hour)
-	recordingStorage, err := storage.NewFromEnv()
-	if err != nil {
-		slog.Error("recording storage", "err", err)
-		os.Exit(1)
-	}
-	if recordingStorage == nil {
-		slog.Warn("RECORDING_S3_BUCKET is not set; consenting calls will not be recorded")
-	}
-	recordingAPI := &api.RecordingAPI{Calls: callsStore, Storage: recordingStorage}
 	tenantAPI := &api.TenantAPI{Tenants: tenants, Dir: "tenants"}
+	docsAPI := &api.DocsAPI{Tenants: tenants, Dir: "tenants", AIURL: os.Getenv("INFERENCE_URL")}
 
 	pricingPath := strings.TrimSpace(os.Getenv("PRICING_FILE"))
 	if pricingPath == "" {
@@ -137,6 +128,7 @@ func main() {
 		envInt64("DEFAULT_MONTHLY_CAP_MINOR", 0),
 		os.Getenv("BUDGET_ACTION"),
 	)
+	billingAPI := &api.BillingAPI{Billing: billingService, Tenants: tenants}
 	agentKey := os.Getenv("AGENT_API_KEY")
 	agentTokenSecret := os.Getenv("AGENT_TOKEN_SECRET")
 	if agentKey == "" {
@@ -182,6 +174,7 @@ func main() {
 	mux.HandleFunc("POST /api/auth/resend-verification", auth.ResendVerificationHandler(authStore, mail, attempts))
 	mux.HandleFunc("POST /api/auth/forgot-password", auth.ForgotPasswordHandler(authStore, mail, attempts, resetCooldown))
 	mux.HandleFunc("POST /api/auth/reset-password", auth.ResetPasswordHandler(authStore))
+	mux.HandleFunc("POST /api/auth/change-password", requireAuth(auth.ChangePasswordHandler(authStore, attempts)))
 	mux.HandleFunc("GET /api/team/accounts", requireAuth(requireRole(auth.RoleOwner)(auth.TeamAccountsHandler(authStore))))
 	mux.HandleFunc("GET /api/team/invites", requireAuth(requireRole(auth.RoleOwner)(auth.TeamInvitesHandler(authStore))))
 	mux.HandleFunc("POST /api/team/invites", requireAuth(requireRole(auth.RoleOwner)(auth.InviteHandler(authStore, mail))))
@@ -191,13 +184,18 @@ func main() {
 	mux.HandleFunc("GET /api/calls", requireAuth(api.Calls(callsStore)))
 	mux.HandleFunc("GET /api/calls/live", requireAuth(api.LiveCalls(callsStore)))
 	mux.HandleFunc("POST /api/calls/{id}/label", requireAuth(requireRole(auth.RoleOwner, auth.RoleManager)(api.Label(callsStore))))
-	mux.HandleFunc("GET /api/calls/{id}/recording", requireAuth(recordingAPI.Get()))
-	mux.HandleFunc("DELETE /api/calls/{id}/recording", requireAuth(recordingAPI.Delete()))
 	mux.HandleFunc("GET /api/calls/{id}/supervisor-token", requireAuth(api.SupervisorToken(callsStore)))
 	mux.HandleFunc("GET /api/report", requireAuth(api.Report(callsStore)))
 	mux.HandleFunc("GET /api/tenants", requireAuth(api.Tenants(tenants)))
 	mux.HandleFunc("GET /api/tenant", requireAuth(tenantAPI.Get()))
 	mux.HandleFunc("PATCH /api/tenant", requireAuth(tenantAPI.Update()))
+	mux.HandleFunc("GET /api/tenant/phone", requireAuth(tenantAPI.Phone()))
+	mux.HandleFunc("GET /api/budget", requireAuth(billingAPI.Get()))
+	mux.HandleFunc("PATCH /api/budget", requireAuth(billingAPI.Update()))
+	mux.HandleFunc("GET /api/tenant/docs", requireAuth(docsAPI.List()))
+	mux.HandleFunc("POST /api/tenant/docs", requireAuth(docsAPI.Upload()))
+	mux.HandleFunc("DELETE /api/tenant/docs", requireAuth(docsAPI.Delete()))
+	mux.HandleFunc("POST /api/tenant/docs/reindex", requireAuth(docsAPI.Reindex()))
 	mux.HandleFunc("GET /api/geocode", api.Geocode())
 	mux.HandleFunc("GET /api/staff", requireAuth(api.Staff(jobsReg)))
 	mux.HandleFunc("POST /api/staff", requireAuth(requireRole(auth.RoleOwner, auth.RoleManager)(api.Staff(jobsReg))))
@@ -217,8 +215,6 @@ func main() {
 	mux.HandleFunc("POST /internal/tools/policy", requireAgent(tools.Policy()))
 	mux.HandleFunc("POST /internal/tools/consent", requireAgent(tools.Consent()))
 	mux.HandleFunc("POST /internal/tools/turn", requireAgent(tools.Turn()))
-	mux.HandleFunc("POST /internal/tools/recording/started", requireAgent(tools.RecordingStarted()))
-	mux.HandleFunc("POST /internal/tools/recording/stopped", requireAgent(tools.RecordingStopped()))
 	mux.HandleFunc("POST /internal/metrics/agent", requireAgent(tools.AgentMetrics()))
 	mux.HandleFunc("POST /internal/tools/usage", requireAgent(tools.Usage()))
 	mux.HandleFunc("POST /internal/tools/escalate", requireAgent(tools.Escalate()))
@@ -285,7 +281,7 @@ func withCORS(next http.Handler, origins []string) http.Handler {
 		if origin != "" && allowed[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Add("Vary", "Origin")
 		}

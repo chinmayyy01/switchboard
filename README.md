@@ -11,8 +11,8 @@ Switchboard handles browser-based voice calls, books visits against its own staf
 > **Status:** portfolio demo with a phone-ready agent path.
 > Browser and LiveKit SIP calls are supported. No public number is provisioned in this snapshot.
 > Auth is enabled by default; accounts and sessions live in PostgreSQL.
-> Bookings, staff, calls, transcript turns, labels, recording metadata, and usage live in PostgreSQL.
-> Recording requires `RECORDING_S3_*`; without it the agent tells the caller recording is unavailable.
+> Bookings, staff, calls, transcript turns, labels, and usage live in PostgreSQL.
+> Calls are never recorded. Transcript turns are stored only with the caller's consent.
 > A real number still needs carrier KYC and the reviewed LiveKit SIP plans in `docs/telephony.md`.
 > Production hardening is tracked in `docs/production-phases.md`.
 
@@ -41,7 +41,7 @@ Switchboard handles browser-based voice calls, books visits against its own staf
 - **Grounded policy.** Hours, pricing, warranty, and service area are answered from tenant documents with citations; it refuses when the answer is not grounded.
 - **Warm handoff.** Emergencies and human requests transfer to the manager or hand the LiveKit room to a signed-in supervisor with the transcript.
 - **Photo triage.** A caller can upload a photo; local vision writes a description into the same LiveKit conversation.
-- **Consent and retention.** Audio recording and transcript storage are separate, versioned choices. Audio is deleted after 30 days and transcript turns after 180 by default.
+- **Consent and retention.** Calls are never recorded. The agent discloses that it is AI and asks before keeping a text transcript; transcript turns are deleted after 180 days by default.
 - **Tenant aware.** Services, docs, staff, and the console are separated per tenant.
 - **Budget aware.** A per-tenant usage ledger and price table feed a pre-call budget check and a hard call duration.
 
@@ -169,8 +169,10 @@ storage or PostgreSQL.
 
 A new workspace starts with generic services and an empty staff list. Add
 technicians in **Console → Team**, then edit services, visit windows, persona,
-disclosure, and the transfer number in **Console → Business**. Add policy
-documents under `tenants/<id>/docs` and run the ingest command for that tenant.
+disclosure, and the transfer number in **Console → Business**. Upload policy
+and FAQ files in **Console → Business → Business documents**; the console saves
+them under `tenants/<id>/docs` and rebuilds the index. The command-line path
+still works: `inference/.venv/bin/python inference/ingest.py --tenant <id> --docs tenants/<id>/docs`.
 
 ### 4. Install the web app
 
@@ -281,8 +283,8 @@ flowchart LR
 LiveKit owns media transport. The Go and Python services exchange JSON over HTTP:
 
 - `POST /internal/agent/session` — bootstrap key → per-call token + tenant config + budget decision.
-- `POST /internal/tools/*` — per-call bearer token for booking, policy, consent, turns, usage, and recording state.
-- `POST /internal/livekit/webhook` — signed lifecycle and Egress events.
+- `POST /internal/tools/*` — per-call bearer token for booking, policy, consent, turns, and usage.
+- `POST /internal/livekit/webhook` — signed call lifecycle events.
 - `GET /api/calls/live` and `GET /api/calls/{id}/supervisor-token` — supervisor handoff.
 
 The console receives transcripts on `lk.transcription` and product events on the `switchboard.events` data topic.
@@ -293,15 +295,13 @@ Real inbound calls run through LiveKit Cloud and the Python agent worker in `age
 
 Plivo is the reference SIP carrier. `cmd/sip-setup` writes reviewed LiveKit SIP plans for the operator to apply with `lk`; nothing is purchased automatically. Any SIP carrier works because the agent reads generic SIP attributes; Exotel remains a stub in `internal/telephony`. See [docs/telephony.md](docs/telephony.md).
 
-LiveKit Cloud's built-in audio/transcript recording stays off. After the disclosure, the agent stores the caller's recording and transcript choices separately. Audio recording starts only on an explicit yes, goes to the configured India bucket, and is stopped at call end. Declining or being unclear leaves recording off.
+LiveKit Cloud's built-in audio and transcript capture stays off. Calls are never recorded. After the disclosure, the agent saves whether the caller agreed to a text transcript; declining or being unclear means no turns are stored.
 
-### Recording and retention
+### Transcript and retention
 
-- Audio is two-channel Egress OGG written to `RECORDING_S3_*` with an object key stored in `call_recordings`.
-- `egress_ended` is authoritative for status and the object key.
-- Playback uses a 10-minute presigned URL; the bucket stays private.
-- `make retention` deletes audio after `RECORDING_RETENTION_DAYS` (30) and transcript turns after `TRANSCRIPT_RETENTION_DAYS` (180).
-- Owner-only `DELETE /api/calls/{id}/recording` removes the object and marks the row deleted.
+- Transcript turns are stored only when the call has transcript consent. The consent check lives in the INSERT, so a buggy agent cannot bypass it.
+- `make retention` deletes transcript turns after `TRANSCRIPT_RETENTION_DAYS` (180).
+- Call records and consent evidence remain after the turns are deleted.
 
 ### Staff and availability
 
@@ -390,7 +390,6 @@ labeled real-call set.
 | `DEFAULT_MONTHLY_CAP_MINOR` | Default cap when no tenant row exists; `0` = unlimited | `0` |
 | `BUDGET_ACTION` | Action at 100%: `transfer`, `refuse`, or `degrade` | `transfer` |
 | `MAX_CALL_SECONDS` | Hard per-call duration | `900` |
-| `RECORDING_RETENTION_DAYS` | Audio retention | `30` |
 | `TRANSCRIPT_RETENTION_DAYS` | Transcript retention | `180` |
 | `KNOWLEDGE_DIR` | Ingested knowledge directory | `data/knowledge` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OTLP endpoint | empty |
@@ -410,7 +409,7 @@ The agent LLM is Gemini when `GEMINI_API_KEY` is set, then OpenAI, with fallback
 | `make ingest` | Ingest Rivera docs into `data/knowledge` |
 | `make eval` | Booking, escalation, and RAG evals |
 | `make sip-plan` | Write reviewed LiveKit SIP plans for Plivo |
-| `make retention` | Enforce recording and transcript retention |
+| `make retention` | Delete transcript turns past the retention window |
 | `make backfill` | Import legacy `data/calls.jsonl` metadata and labels (add `-transcripts` only with a consent basis) |
 | `make agent-install` | Create the agent venv and install LiveKit Agents |
 | `make agent` | Run the LiveKit agent worker in dev mode |
@@ -439,7 +438,7 @@ cmd/switchboard/       Go entry point and HTTP routes
 cmd/account/           Create the owner or trial accounts
 cmd/migrate-auth/      Move SQLite accounts to PostgreSQL
 cmd/backfill/          Import legacy JSONL calls and labels
-cmd/retention/         Enforce recording and transcript retention
+cmd/retention/         Delete transcript turns past the retention window
 cmd/eval/              Booking and escalation eval runner
 cmd/sip-setup/         Emit reviewed LiveKit SIP plans for Plivo
 config/pricing.json    Versioned per-model price table
@@ -449,10 +448,9 @@ internal/billing/      Usage ledger, price table, budget checks
 internal/jobs/         Job store, availability, staff assignment, migrations
 internal/staff/        Staff skills, days, shifts, assignments
 internal/tenant/       Tenant config loader
-internal/api/          Calls, live calls, labels, report, staff, recording, agent tools
-internal/calls/        Call records, turns, consent, recordings, reaper
+internal/api/          Calls, live calls, labels, report, staff, tenant settings, docs, agent tools
+internal/calls/        Call records, turns, transcript consent, reaper
 internal/livekit/      Browser/supervisor tokens and webhook verification
-internal/storage/      S3 presign and delete for recordings
 internal/telephony/    Provider abstraction: Plivo primary, Exotel stub
 internal/auth/         Postgres/SQLite accounts, sessions, quotas, login, Redis limits
 internal/inference/    AI service clients
@@ -471,7 +469,6 @@ deploy/observability/  Prometheus, Grafana, Jaeger
 - **Telephony needs carrier setup.** LiveKit inbound SIP is implemented, but a live number requires carrier KYC, a DID, and applying the generated SIP plans. Exotel is intentionally not implemented.
 - **Self-serve signup creates a workspace.** New businesses sign up at `/signup`, which creates a tenant directory and owner account. Teammates are invited from **Access**. SSO is not included.
 - **Tenant config is file-backed.** New workspaces write `tenants/<id>/config.json`; a multi-instance deployment needs a shared volume or a move to object storage/PostgreSQL.
-- **Recordings need object storage.** Without `RECORDING_S3_*`, the agent tells the caller recording is unavailable. Retention is enforced by `make retention`, not automatically by the web process.
 - **Cost caps need a tenant row.** `tenant_budgets` defaults to unlimited in development. Set a cap and a price table before production.
 - **Single node without Redis.** Set `REDIS_URL` for distributed call/login limits. Without it, limits are per process.
 - **Sarvam/Deepgram/model dependency.** Speech and chat quality and latency depend on external providers.
@@ -489,11 +486,11 @@ This branch is a demo. Before a real phone product:
 - [x] Self-serve signup, email verification, password reset, and owner/manager/viewer roles.
 - [ ] SSO and enterprise identity.
 - [x] Postgres for bookings, staff, calls, turns, labels, usage, and auth.
-- [x] Redis-backed distributed quotas and object storage for recordings.
-- [x] Call recordings with separate consent, retention, and deletion.
+- [x] Redis-backed distributed quotas.
+- [x] Transcript consent and 180-day retention. Calls are not recorded.
 - [x] Per-tenant usage ledger, price table, budgets, and hard call duration.
 - [ ] SLOs with Alertmanager routing, on-call, and incident runbooks. (Rules exist; routing does not.)
-- [x] Consent and recording disclosure. DPDP/GDPR legal review remains open.
+- [x] AI and transcript disclosure. DPDP/GDPR legal review remains open.
 - [x] Legacy WebSocket call path removed.
 
 Production hardening is tracked separately; `main` stays as the portfolio demo snapshot.

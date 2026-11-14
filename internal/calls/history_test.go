@@ -30,7 +30,7 @@ func TestCallHistoryListLiveAndLabels(t *testing.T) {
 	if err := store.Start(ctx, Call{ID: callID, TenantID: tenantID, RoomName: room, Source: "sip"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetConsent(ctx, callID, false, true, "en"); err != nil {
+	if err := store.SetConsent(ctx, callID, true, "en"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppendTurn(ctx, Turn{CallID: callID, TenantID: tenantID, Seq: 1, Role: "user", Text: "my sink is leaking"}); err != nil {

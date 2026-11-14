@@ -242,7 +242,7 @@ export function LiveKitTestCall({
             <li>Allow microphone access when your browser asks.</li>
             <li>Use headphones to avoid echo. You can interrupt the receptionist at any time.</li>
             <li>
-              The agent asks for recording consent first. Audio is recorded only if you agree.
+              The agent says it is an AI assistant and asks before keeping a text transcript. Calls are never recorded.
             </li>
           </ul>
         </Card>

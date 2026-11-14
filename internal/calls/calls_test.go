@@ -64,13 +64,9 @@ func TestCallerIdConsentTurnsAndReaper(t *testing.T) {
 		t.Fatalf("turn before consent recorded=%v err=%v", recorded, err)
 	}
 
-	// Audio declined, transcript allowed.
-	if err := store.SetConsent(ctx, callID, false, true, "en"); err != nil {
+	// Transcript allowed.
+	if err := store.SetConsent(ctx, callID, true, "en"); err != nil {
 		t.Fatal(err)
-	}
-	recording, err := store.Consent(ctx, callID)
-	if err != nil || recording == nil || *recording {
-		t.Fatalf("recording consent = %v err=%v", recording, err)
 	}
 	transcript, err := store.TranscriptConsent(ctx, callID)
 	if err != nil || transcript == nil || !*transcript {

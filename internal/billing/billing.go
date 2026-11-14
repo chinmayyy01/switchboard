@@ -176,3 +176,107 @@ ON CONFLICT (call_id, kind, model) DO UPDATE SET
 	}
 	return total, nil
 }
+
+type UsageLine struct {
+	Kind      string `json:"kind"`
+	Model     string `json:"model"`
+	Units     int64  `json:"units"`
+	CostMinor int64  `json:"cost_minor"`
+}
+
+type Summary struct {
+	Period          string      `json:"period"`
+	Currency        string      `json:"currency"`
+	Action          string      `json:"action"`
+	CapMinor        int64       `json:"cap_minor"`
+	SpentMinor      int64       `json:"spent_minor"`
+	RemainingMinor  int64       `json:"remaining_minor"`
+	DefaultCapMinor int64       `json:"default_cap_minor"`
+	Items           []UsageLine `json:"items"`
+}
+
+// Summary is the console view of the current period: the cap in force, what has
+// been spent, and the per-modality breakdown.
+func (s *Service) Summary(ctx context.Context, tenantID string) (Summary, error) {
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	out := Summary{
+		Period:          Period(now),
+		Currency:        "INR",
+		Action:          s.DefaultAction,
+		CapMinor:        s.DefaultCapMinor,
+		DefaultCapMinor: s.DefaultCapMinor,
+		Items:           []UsageLine{},
+	}
+	var action, currency string
+	err := s.DB.QueryRowContext(ctx, `
+SELECT cap_minor, currency, action FROM tenant_budgets WHERE tenant_id = $1`, tenantID,
+	).Scan(&out.CapMinor, &currency, &action)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return out, err
+	}
+	if err == nil {
+		out.Currency = currency
+		out.Action = action
+	}
+	if s.Prices != nil && s.Prices.Currency != "" {
+		out.Currency = s.Prices.Currency
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+SELECT kind, model, COALESCE(SUM(units), 0), COALESCE(SUM(cost_minor), 0)
+FROM tenant_usage
+WHERE tenant_id = $1 AND period = $2
+GROUP BY kind, model
+ORDER BY kind, model`, tenantID, out.Period)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var line UsageLine
+		if err := rows.Scan(&line.Kind, &line.Model, &line.Units, &line.CostMinor); err != nil {
+			return out, err
+		}
+		out.SpentMinor += line.CostMinor
+		out.Items = append(out.Items, line)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	if out.CapMinor > 0 {
+		out.RemainingMinor = out.CapMinor - out.SpentMinor
+		if out.RemainingMinor < 0 {
+			out.RemainingMinor = 0
+		}
+	}
+	return out, nil
+}
+
+// SetBudget creates or updates the monthly cap. Zero means unlimited.
+func (s *Service) SetBudget(ctx context.Context, tenantID string, capMinor int64, action string) error {
+	if capMinor < 0 {
+		return errors.New("cap cannot be negative")
+	}
+	switch action {
+	case "":
+		action = s.DefaultAction
+	case "transfer", "refuse", "degrade":
+	default:
+		return errors.New("invalid budget action")
+	}
+	currency := "INR"
+	if s.Prices != nil && s.Prices.Currency != "" {
+		currency = s.Prices.Currency
+	}
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO tenant_budgets (tenant_id, cap_minor, currency, action)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (tenant_id) DO UPDATE SET
+    cap_minor = EXCLUDED.cap_minor,
+    currency = EXCLUDED.currency,
+    action = EXCLUDED.action,
+    updated_at = NOW()`, tenantID, capMinor, currency, action)
+	return err
+}

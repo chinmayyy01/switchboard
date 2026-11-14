@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/chinmay/switchboard/internal/auth"
@@ -15,13 +16,17 @@ type TenantAPI struct {
 	Dir     string
 }
 
-func (a *TenantAPI) tenantID(r *http.Request, account auth.Account) string {
+func requestTenantID(r *http.Request, account auth.Account) string {
 	if account.IsOwner {
 		if value := strings.TrimSpace(r.URL.Query().Get("tenant")); value != "" {
 			return value
 		}
 	}
 	return account.TenantID
+}
+
+func (a *TenantAPI) tenantID(r *http.Request, account auth.Account) string {
+	return requestTenantID(r, account)
 }
 
 func (a *TenantAPI) Get() http.HandlerFunc {
@@ -106,5 +111,53 @@ func (a *TenantAPI) Update() http.HandlerFunc {
 		}
 		a.Tenants.Add(saved)
 		writeJSON(w, saved)
+	}
+}
+
+// PhoneStatus describes whether this deployment has a carrier number wired to
+// LiveKit SIP. It is configuration-derived: no number exists until the SIP
+// subdomain and a DID are set.
+type PhoneStatus struct {
+	Connected bool   `json:"connected"`
+	Number    string `json:"number,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+}
+
+func currentPhoneStatus() PhoneStatus {
+	number := firstEnv("LIVEKIT_SIP_NUMBER", "PLIVO_DEFAULT_NUMBER")
+	livekitDomain := strings.TrimSpace(os.Getenv("LIVEKIT_SIP_SUBDOMAIN"))
+	plivoDomain := strings.TrimSpace(os.Getenv("PLIVO_SIP_DOMAIN"))
+	status := PhoneStatus{Number: number}
+	switch {
+	case livekitDomain != "":
+		status.Provider = "livekit"
+	case plivoDomain != "":
+		status.Provider = "plivo"
+	}
+	status.Connected = number != "" && status.Provider != ""
+	return status
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (a *TenantAPI) Phone() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		account, ok := accountFrom(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if _, ok := a.Tenants.Get(a.tenantID(r, account)); !ok {
+			http.Error(w, "unknown tenant", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, currentPhoneStatus())
 	}
 }

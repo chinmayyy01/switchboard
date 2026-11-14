@@ -251,6 +251,62 @@ func ForgotPasswordHandler(store *Store, sender mailer.Sender, attempts, cooldow
 	}
 }
 
+// ChangePasswordHandler updates the signed-in account's password after
+// checking the current one. Other sessions are signed out, the current one
+// stays usable.
+func ChangePasswordHandler(store *Store, attempts *AttemptLimiter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		account, ok := FromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sign in required"})
+			return
+		}
+		key := "password|" + account.ID
+		if attempts != nil && !attempts.Allow(key) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts, try again later"})
+			return
+		}
+		var body struct {
+			CurrentPassword string `json:"current_password"`
+			NewPassword     string `json:"new_password"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+			return
+		}
+		if len(body.NewPassword) < 8 || len(body.NewPassword) > 200 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "password must be 8–200 characters"})
+			return
+		}
+		if body.NewPassword == body.CurrentPassword {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "choose a different password"})
+			return
+		}
+		hash, err := store.PasswordHash(r.Context(), account.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not update the password"})
+			return
+		}
+		if !VerifyPassword(hash, body.CurrentPassword) {
+			if attempts != nil {
+				attempts.Fail(key)
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "current password is incorrect"})
+			return
+		}
+		if err := store.SetPassword(r.Context(), account.ID, body.NewPassword); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not update the password"})
+			return
+		}
+		_ = store.DeleteOtherSessions(r.Context(), account.ID, SessionToken(r))
+		if attempts != nil {
+			attempts.Reset(key)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
 func ResetPasswordHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
